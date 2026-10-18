@@ -244,3 +244,11 @@ def test_traffic_command():
     assert after == before                       # traffic doesn't add undo steps
     assert "traffic rate: 2 packets/s" in log and "traffic stopped" in log and "busiest cables" in log
     assert "already off" in log and "at most 50" in log and "no group nope" in log
+
+
+def test_cluster_mode_command():
+    app, log = asyncio.run(_session(["demo core", "clusters", "cluster core mode=active-active",
+                                     "cluster core mode=sideways"]))
+    text = " ".join(" ".join(log).split())
+    assert "r2 standby" in text and "every active member forwards" in text and "mode must be" in text
+    assert app.net.cluster_modes == {}

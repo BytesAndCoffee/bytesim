@@ -58,7 +58,8 @@ class HAMixin(NetworkBase):
         owners: dict[int, list[tuple[str, int]]] = {}
         for part in active:
             claimed: set[int] = set()
-            for m in part:
+            # active-passive: only the leader (the one member that forwards) owns gateways
+            for m in (part[:1] if self.cluster_modes.get(name) == "active-passive" else part):
                 for port, ifc in self.addressed(m):
                     li = self.link_index(m, port)
                     if li is not None and self.usable(self.links[li]) and ifc.net not in claimed:
@@ -69,6 +70,12 @@ class HAMixin(NetworkBase):
             len(parts([k for k in ctrl_up if k is not l])) == 1 for l in ctrl_up)
         dead = [m for m in members if m not in alive]
         leaders = [p[0] for p in active]
+        # Who forwards transit traffic: every active member (active-active), or only
+        # each active partition's leader (active-passive; the rest stand by).
+        mode = self.cluster_modes.get(name, "active-active")
+        forwarders = set(leaders) if mode == "active-passive" else {m for p in active for m in p}
+        standby = [m for m in alive if m not in forwarders]
+        on_standby = f", {' '.join(standby)} standby" if mode == "active-passive" and standby else ""
         if not alive:
             level, text = "down", "DOWN · every member has failed"
         elif len(active) > 1:
@@ -77,17 +84,22 @@ class HAMixin(NetworkBase):
         elif not active:
             level, text = "down", "OUTAGE · no partition has quorum, all members stood down"
         elif len(partitions) > 1:
-            standby = [m for p in partitions if p not in active for m in p]
-            level, text = "degraded", f"partitioned · {leaders[0]} active, {' '.join(standby)} stood down ({policy})"
+            down = [m for p in partitions if p not in active for m in p]
+            level, text = "degraded", f"partitioned · {leaders[0]} active, {' '.join(down)} stood down ({policy})"
         elif dead:
-            level, text = "degraded", f"failover · {' '.join(dead)} down, {leaders[0]} active"
+            level, text = "degraded", f"failover · {' '.join(dead)} down, {leaders[0]} active{on_standby}"
         elif n > 1 and not redundant:
             level, text = "degraded", f"no redundancy · control {len(ctrl_up)}/{len(ctrl)} up, one more failure splits it"
         else:
-            level, text = "ok", f"healthy · {leaders[0]} active, control {len(ctrl_up)}/{len(ctrl)} up"
+            level, text = "ok", f"healthy · {leaders[0]} active{on_standby}, control {len(ctrl_up)}/{len(ctrl)} up"
         return {"members": members, "alive": alive, "partitions": partitions, "active": active,
                 "owners": owners, "ctrl": len(ctrl), "ctrl_up": len(ctrl_up),
-                "policy": policy, "level": level, "text": text}
+                "policy": policy, "level": level, "text": text,
+                "mode": mode, "forwarders": forwarders, "standby": standby}
+
+    def standby_routers(self) -> set[str]:
+        """Members of active-passive clusters that must not forward transit traffic now."""
+        return {m for c in self.cluster_modes if c in self.clusters for m in self.ha_state(c)["standby"]}
 
     def vip_owners(self, net: int) -> list[tuple[str, int]]:
         return [o for c in self.clusters for o in self.ha_state(c)["owners"].get(net, [])]

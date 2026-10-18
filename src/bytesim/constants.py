@@ -46,3 +46,4 @@ POOL = range(10, VIP_HOST)                    # DHCP / ad-hoc hosts; routers tak
 ROLES = ("data", "control", "control-backup", "fabric")
 
 POLICIES = ("none", "quorum", "witness")
+CLUSTER_MODES = ("active-active", "active-passive")   # who forwards transit traffic in a cluster

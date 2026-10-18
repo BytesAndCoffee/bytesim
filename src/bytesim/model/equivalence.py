@@ -50,6 +50,7 @@ def canonical(net: Network) -> dict[str, Any]:
         "cables": Counter(link_key(l.a, l.pa, l.b, l.pb, l.role) for l in net.links),
         "groups": {g: tuple(ms) for g, ms in net.groups.items()},
         "clusters": dict(net.clusters),
+        "cluster_modes": dict(net.cluster_modes),
         "stp_off": frozenset(net.stp_off),
         "stp_priority": dict(net.stp_priority),
         "dhcp_off": frozenset(net.dhcp_off),

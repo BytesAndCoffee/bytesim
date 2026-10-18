@@ -48,7 +48,10 @@ def render_inspector(net: Network, sel: str | None, selected_group: str | None,
         out.append(f"[dim]{inside} internal · {outside} external cables[/]")
         if gsel in net.clusters and not graph:
             st = net.ha_state(gsel)
-            out.append(f"[b]HA cluster[/] · policy {st['policy']}")
+            out.append(f"[b]HA cluster[/] · policy {st['policy']} · {st['mode']}")
+            if st["mode"] == "active-passive":
+                out.append(f"forwarding: {' '.join(sorted(st['forwarders'])) or '[red]nobody[/]'}"
+                           + (f" · standby {' '.join(st['standby'])}" if st["standby"] else ""))
             out.append(f"[{HA_COLOR[st['level']]}]{st['text']}[/]")
             out.append(f"control links {st['ctrl_up']}/{st['ctrl']} up · "
                        f"{len(st['partitions'])} partition{'s' if len(st['partitions']) != 1 else ''}")

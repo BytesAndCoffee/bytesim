@@ -1,7 +1,7 @@
 """Groups (nestable) and HA clusters."""
 from __future__ import annotations
 
-from ...constants import POLICIES, VIP_HOST
+from ...constants import CLUSTER_MODES, POLICIES, VIP_HOST
 from ...model import NetError, fmt
 from ..theme import HA_COLOR, group_color
 from .base import CommandHost
@@ -145,6 +145,7 @@ class GroupCommands(CommandHost):
         if not args or args[0].lower() not in net.clusters:
             raise NetError("usage: uncluster <cluster>  (the routers stay grouped)")
         del net.clusters[args[0].lower()]
+        net.cluster_modes.pop(args[0].lower(), None)
         self.log_msg(f"{args[0].lower()} is a plain group again")
         self.changed()
 
@@ -153,7 +154,7 @@ class GroupCommands(CommandHost):
         net = self.net
         for c in net.clusters:
             st = net.ha_state(c)
-            self.log_msg(f"[{HA_COLOR[st['level']]}]{c:<8}[/] {' '.join(st['members'])}  {st['text']}")
+            self.log_msg(f"[{HA_COLOR[st['level']]}]{c:<8}[/] {' '.join(st['members'])}  [dim]{st['mode']}[/]  {st['text']}")
         if not net.clusters:
             self.log_msg("[dim]no clusters: try cluster rfab1 r1 r2[/]")
 
@@ -177,6 +178,15 @@ class GroupCommands(CommandHost):
         policy = opts.get("policy")
         if policy is not None and policy not in POLICIES:
             raise NetError(f"policy must be one of: {', '.join(POLICIES)}")
+        mode = opts.get("mode")
+        if mode is not None and mode not in CLUSTER_MODES:
+            raise NetError(f"mode must be {' or '.join(CLUSTER_MODES)}")
+
+        def set_mode() -> None:
+            if mode == "active-passive":
+                net.cluster_modes[name] = mode
+            elif mode == "active-active":
+                net.cluster_modes.pop(name, None)
         if len(args) > 1:
             ids = [net.get(self._ref(t)[0]).id for t in args[1:]]
             bad = [d for d in ids if not net.is_router(d)]
@@ -184,13 +194,21 @@ class GroupCommands(CommandHost):
                 raise NetError(f"only routers and gateways can be clustered: {' '.join(bad)}")
             net.group_add(name, ids)
             net.clusters[name] = policy or net.clusters.get(name, "none")
+            set_mode()
+            forwarding = net.cluster_modes.get(name, "active-active")
             self.log_msg(f"[{group_color(name)}]▣ cluster {name}[/]: {' '.join(net.groups[name])} "
-                         f"[dim](policy {net.clusters[name]}; virtual gateway host {VIP_HOST} on each network)[/]")
+                         f"[dim](policy {net.clusters[name]}, {forwarding}; virtual gateway host {VIP_HOST} "
+                         f"on each network)[/]")
         elif name not in net.clusters:
             raise NetError(f"no such cluster: {name} (create: cluster {name} r1 r2)")
-        elif policy:
-            net.clusters[name] = policy
-            self.log_msg(f"{name}: split policy → {policy}")
+        elif policy or mode:
+            if policy:
+                net.clusters[name] = policy
+                self.log_msg(f"{name}: split policy → {policy}")
+            if mode:
+                set_mode()
+                self.log_msg(f"{name}: {mode}" + (" (only the active member forwards; the rest stand by)"
+                                                  if mode == "active-passive" else " (every active member forwards)"))
         else:
             st = net.ha_state(name)
             self.log_msg(f"[{HA_COLOR[st['level']]}]{name}: {st['text']}[/]")

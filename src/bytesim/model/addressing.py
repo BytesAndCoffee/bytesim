@@ -49,6 +49,7 @@ class AddressingMixin(NetworkBase):
         """Give every cabled router/gateway port an address on its local network,
         opening a new network id if the segment doesn't have one yet."""
         notes = []
+        owner = self._network_owners()
         for dev in self.sorted_devices():
             if dev.kind not in "rg":
                 continue
@@ -62,7 +63,12 @@ class AddressingMixin(NetworkBase):
                     continue
                 if not self.usable(self.links[li]):
                     continue             # failed: keep the config for when it comes back
+                here = self._segment_key((dev.id, p))
+                if ifc.addr and owner.get(ifc.net, here) != here:
+                    ifc.clear()          # a stale id that belongs to another segment
                 local = self.local_net((dev.id, p))
+                if local is not None and owner.get(local, here) != here:
+                    local = None         # this segment's only network id is someone else's
                 if ifc.addr and (local is None or local == ifc.net):
                     continue
                 net = local if local is not None else self.new_net()
@@ -71,6 +77,25 @@ class AddressingMixin(NetworkBase):
                 ifc.host = next(h for h in range(1, HOST_MAX) if h not in used)
                 notes.append(f"{dev.id}:{dev.port_name(p)} → {fmt(ifc.addr)}")
         return notes
+
+    def _segment_key(self, ifc: tuple[str, int]) -> frozenset:
+        return frozenset(self.segment(*ifc)) | {ifc}  # type: ignore[attr-defined]
+
+    def _network_owners(self) -> dict[int, frozenset]:
+        """Which segment each network id belongs to. A network id is one segment's;
+        if a stale id (say, after re-cabling) turns up on several segments, the first
+        router port that has it (in device order) keeps it and the others are renumbered."""
+        owner: dict[int, frozenset] = {}
+        for dev in self.sorted_devices():
+            if dev.kind not in "rg":
+                continue
+            for p in range(1, dev.nports + 1):
+                ifc = self.ifaces.get(f"{dev.id}:{p}")
+                li = self.link_index(dev.id, p)
+                if ifc is None or not ifc.addr or li is None or not self.usable(self.links[li]):
+                    continue
+                owner.setdefault(ifc.net, self._segment_key((dev.id, p)))
+        return owner
 
     def dhcp_server(self, client: tuple[str, int]) -> tuple[str, int] | None:
         for e in self.segment(*client):

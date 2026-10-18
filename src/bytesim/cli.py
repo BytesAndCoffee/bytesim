@@ -15,7 +15,7 @@ def build_parser() -> argparse.ArgumentParser:
                     "cabled together and simulated in your terminal.")
     p.add_argument("file", nargs="?", type=Path,
                    help="a saved network (.json) or a topology (.yaml) to open")
-    p.add_argument("--demo", choices=["basic", "ha", "loop"], help="start with a sample network")
+    p.add_argument("--demo", choices=["basic", "ha", "loop", "core"], help="start with a sample network")
     p.add_argument("--run", "-c", metavar="CMD", action="append", default=[],
                    help="a console command to run at startup (repeatable)")
     p.add_argument("--version", action="version", version=f"%(prog)s {__version__}")

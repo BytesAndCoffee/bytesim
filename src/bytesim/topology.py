@@ -41,12 +41,12 @@ from typing import Any
 
 import yaml
 
-from .constants import ALIASES, AUTO, GROUP_NAME, KINDS, POLICIES, RANK, REF, ROLES
+from .constants import ALIASES, AUTO, CLUSTER_MODES, GROUP_NAME, KINDS, POLICIES, RANK, REF, ROLES
 from .model import NetError, Network
 from .model.types import Device, Iface
 
 SCHEMA = "bytesim/topology-v1"
-GROUP_KEYS = {"members", "cluster"}
+GROUP_KEYS = {"members", "cluster", "mode"}
 INDEXED = re.compile(r"^([A-Za-z_][\w-]*)\[(\d+)\](?::(?:p|nic|eth)?(\d+))?$")
 KIND_NAME = {name: k for k, (name, _, _) in KINDS.items()}
 
@@ -233,6 +233,12 @@ class _Builder:
                 if cluster not in POLICIES:
                     raise NetError(f"{where}.{local}.cluster: one of {', '.join(POLICIES)} (or true)")
                 self.net.clusters[name] = cluster
+            mode = val.get("mode") if isinstance(val, dict) else None
+            if mode is not None:
+                if cluster is None or str(mode) not in CLUSTER_MODES:
+                    raise NetError(f"{where}.{local}.mode: {' or '.join(CLUSTER_MODES)}, on a group with cluster:")
+                if str(mode) == "active-passive":
+                    self.net.cluster_modes[name] = "active-passive"
             made.append(name)
         return made
 
@@ -458,6 +464,8 @@ def _dump_group(net: Network, g: str, depth: int) -> list[str]:
     lines = [f"{pad}{g}:"]
     if cluster is not None:
         lines.append(f"{pad}  cluster: {cluster}")
+        if g in net.cluster_modes:
+            lines.append(f"{pad}  mode: {net.cluster_modes[g]}")
     if devs:
         lines.append(f"{pad}  members: [{', '.join(devs)}]")
     for sub in subs:

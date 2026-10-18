@@ -71,4 +71,41 @@ def loop() -> tuple[Network, str]:
                  "[cyan]stp on[/], [cyan]stp[/], [cyan]fail s1:2[/], [cyan]ping c1 c2[/]")
 
 
-DEMOS: dict[str, Callable[[], tuple[Network, str]]] = {"basic": basic, "ha": ha, "loop": loop}
+def core() -> tuple[Network, str]:
+    """Three sites joined only through a redundant, routed core (an active-passive HA pair).
+
+    Every site↔core cable is its own little network, so no two sites share one:
+    traffic between sites has to be routed by a core router."""
+    net = Network()
+    for _ in range(2):
+        net.add("r", 8)                         # r1, r2: the core
+    for _ in range(6):
+        net.add("r", 6)                         # r3–r8: two routers per site
+    for _ in range(3):
+        net.add("s", 6)                         # s1–s3: one LAN switch per site
+    for _ in range(6):
+        net.add("c", 1)                         # c1–c6: two computers per site
+    net.group_add("core", ["r1", "r2"])
+    net.clusters["core"] = "witness"
+    net.cluster_modes["core"] = "active-passive"
+    net.connect("r1", 7, "r2", 7, "control")
+    net.connect("r1", 8, "r2", 8, "control-backup")
+    for i in range(3):
+        ra, rb, sw = f"r{3 + 2 * i}", f"r{4 + 2 * i}", f"s{1 + i}"
+        ca, cb = f"c{1 + 2 * i}", f"c{2 + 2 * i}"
+        net.group_add(f"rtr{i + 1}", [ra, rb])
+        net.group_add(f"lan{i + 1}", [sw, ca, cb])
+        net.group_add(f"site{i + 1}", [f"rtr{i + 1}", f"lan{i + 1}"])
+        for d in (ra, rb, ca, cb):
+            net.connect(d, None, sw, None)
+    for r in ("r3", "r4"):                      # site 1's routers to both core routers…
+        for c in ("r1", "r2"):
+            net.connect(r, None, c, None)
+    net.copy_cabling("rtr1", "rtr2", [("core", "core")])   # …and the same pattern for sites 2 and 3
+    net.copy_cabling("rtr1", "rtr3", [("core", "core")])
+    return net, ("[green]routed core demo loaded[/]: three sites, joined only through core (r1 active, "
+                 "r2 standby).\n  try [cyan]ping c1 c3[/] (via the core), [cyan]ping c1 c2[/] (stays local), "
+                 "[cyan]fail r1[/], [cyan]fail r3:3[/], [cyan]fail r1:7[/], [cyan]traffic on 6[/]")
+
+
+DEMOS: dict[str, Callable[[], tuple[Network, str]]] = {"basic": basic, "ha": ha, "loop": loop, "core": core}

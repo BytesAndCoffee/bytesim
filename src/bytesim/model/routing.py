@@ -70,6 +70,7 @@ class RoutingMixin(NetworkBase):
         Routers are nodes; two routers are adjacent when they share a network.
         Counting cables rather than routers lets a direct fabric link win over
         a detour back through a switched network."""
+        standby = self.standby_routers()  # type: ignore[attr-defined]
         best: dict[str, int] = {start: 0}
         prev: dict[str, tuple[str, Leg] | None] = {start: None}
         heap: list[tuple[int, int, str, Leg | None]] = [(0, 0, start, None)]
@@ -105,6 +106,8 @@ class RoutingMixin(NetworkBase):
                     a = self.addr_of(e)
                     if not (self.is_router(e[0]) and a and a[0] == ifc.net) or e[0] in done:
                         continue
+                    if e[0] in standby and not (dst is not None and dst[0] == e[0]):
+                        continue                   # an active-passive standby doesn't forward
                     path = self.l2path((u, p), e)
                     c = cost + len(path) - 1
                     if c < best.get(e[0], 10**9):

@@ -12,6 +12,7 @@
 - [Loops, spanning tree and broadcast storms](#loops-spanning-tree-and-broadcast-storms)
 - [Cable roles and failures](#cable-roles-and-failures)
 - [HA router clusters](#ha-router-clusters)
+- [Routed cores vs shared fabrics](#routed-cores-vs-shared-fabrics)
 - [Graph mode](#graph-mode)
 - [Undo](#undo)
 - [Saving and loading](#saving-and-loading)
@@ -461,6 +462,50 @@ restore all
 fail r1:2                   r1 loses fab2: traffic crosses the fabric link
 ```
 
+## Routed cores vs shared fabrics
+
+Connecting several sites takes a choice between two designs. They look
+alike on screen but behave very differently.
+
+**A shared switching fabric.** Every site's routers plug into the same
+switches. A switched area is *one* network, so every site router on it is a
+direct neighbour of every other. Site 1 can send to site 2 across the switches
+without ever touching the router you meant to be "the core". The core is
+optional: traffic takes whichever path is shortest. One broadcast domain also
+spans every site, so a loop or a storm there hits all of them.
+
+**A routed core.** Each site router gets its own cable to each core router.
+Every such cable is a separate little network, so no two sites share one. To
+get from one site to another, a packet *must* be routed by a core router,
+because nothing else connects them. Traffic within a site never needs the
+core.
+
+Make the core redundant with an HA cluster in active-passive mode:
+
+```text
+cluster core r1 r8 policy=witness mode=active-passive
+r1:15 r8:15 role=control
+r1:16 r8:16 role=control-backup
+```
+
+- **`mode=active-passive`**: only the active member (the first one alive in the
+  winning partition) forwards traffic. The other stands by, and takes over the
+  moment the active one fails or loses the election. The cluster's inspector
+  says who's forwarding and who's on standby.
+- **`mode=active-active`** (the default): every active member forwards.
+  Routers simply pick the shortest path.
+
+The split policy still decides what happens when the control links fail:
+- `witness`: one side keeps forwarding.
+- `quorum`: with two routers, a split means *neither* side forwards, so the
+  sites are cut off from each other.
+- `none`: both sides forward (split-brain).
+
+`bytesim --demo core` is a three-site network built this way. Try `ping c1 c3`
+(it goes through `r1`), `ping c1 c2` (it stays in the site), `fail r1` (the
+standby `r2` takes over), `fail r3:3` (that site's other router carries the
+traffic), and `traffic on 6` (the active core router's cables get busy).
+
 ## Graph mode
 
 ```text
@@ -543,7 +588,7 @@ them, and a group name on its own selects the group.
 | `clone <group> [new-name]` | `copy`, `dup` | copy a group and its internal cables |
 | `copy <group>(old, …) <new>(new, …)` | | clone it, cabled to the new endpoints like the original is to the old |
 | `ports copy <group>(old, …) <group>(new, …)` | | cable an existing group the way another one is cabled |
-| `cluster <name> [routers] [policy=]` | | create, configure or inspect an HA cluster |
+| `cluster <name> [routers] [policy=] [mode=]` | | create, configure or inspect an HA cluster (mode: active-active / active-passive) |
 | `clusters`, `uncluster <name>` | | list clusters / turn one back into a group |
 | `ip [id[:port]] [addr [gw] \| dhcp \| adhoc \| none]` | | show or set addresses |
 | `dhcp`, `release`, `adhoc <id[:nic]\|all>` | | client address control |
@@ -558,7 +603,7 @@ them, and a group name on its own selects the group.
 | `renumber [auto] bfs\|dfs [root]`, `renumber off` | `rename` | renumber ids in traversal order |
 | `auto` | `arrange`, `layout` | re-arrange and keep arranging |
 | `list` | `ls` | devices, cables, groups |
-| `demo [basic\|ha\|loop]` | | load a sample network |
+| `demo [basic\|ha\|loop\|core]` | | load a sample network |
 | `save [file]`, `load [file]` | `open` | save files; `load` also reads topologies |
 | `export <file.yaml> [ports]` | | write a declarative topology |
 | `export script [readable\|shortest\|explicit] [file]` | | the commands that rebuild the network (verified) |

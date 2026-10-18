@@ -52,7 +52,8 @@ forwarding, failure) and leaves out the detail that gets in the way:
 - **Switching loops**: spanning tree with root bridges and blocked ports, and
   real broadcast storms (frames multiplying, MAC tables flapping) when STP is off.
 - **HA router clusters** with a shared virtual gateway, failover, split-brain,
-  and quorum or witness policies.
+  quorum or witness policies, and active-active or active-passive forwarding.
+  Build redundant routed cores that inter-site traffic can't bypass.
 - **Nested groups** drawn as labelled frames, which you can **clone** along with
   their internal cables.
 - **BFS/DFS renumbering**, once or automatically after every change, so ids
@@ -78,6 +79,7 @@ Requires Python 3.10+ and a terminal with Unicode and colour support.
 bytesim --demo basic        # a small routed network
 bytesim --demo ha           # a clustered router pair between two fabrics
 bytesim --demo loop         # a switch loop with STP off: set off a storm
+bytesim --demo core         # three sites joined through a redundant routed core
 bytesim mynet.json          # open a saved network
 bytesim campus.yaml         # build one from a topology file
 ```

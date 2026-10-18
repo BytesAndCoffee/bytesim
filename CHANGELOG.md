@@ -34,4 +34,9 @@ First release.
 - Multi-level undo and redo (`undo [n]`, `redo [n]`, `history`, `u` / `U`), up to 100 steps.
 - Random background traffic (`traffic on [rate] [seed=] [hosts=] [mix=]`) with cable load
   shading, drop reasons and statistics.
+- Active-passive HA clusters (`cluster … mode=active-passive`): only the active member forwards;
+  the standby takes over on failure or election. `demo core`: three sites through a redundant
+  routed core.
+- Router autoconfiguration keeps every network id on one segment: stale ids left by
+  re-cabling are renumbered instead of being shared by separate links.
 - JSON save and load; a `bytesim` command with `--demo` and `--run`.

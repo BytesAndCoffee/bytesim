@@ -165,8 +165,9 @@ Under `groups:` (stand-alone, or in a template):
 - a **list** (or a single name) gives the members: `link1: [s8, s12]`. A
   device can belong to only one group;
 - a **mapping** gives subgroups, optionally with `members:` for devices that
-  belong directly, and `cluster:` (`none`, `quorum`, `witness`, or `true`) to
-  make the group an HA cluster.
+  belong directly, `cluster:` (`none`, `quorum`, `witness`, or `true`) to make
+  the group an HA cluster, and `mode: active-passive` so only its active
+  member forwards (the default is `active-active`).
 
 ### Links
 Each item is one macro, optionally with `role:`:

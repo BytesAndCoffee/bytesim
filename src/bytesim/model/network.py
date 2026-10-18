@@ -108,6 +108,7 @@ class Network(GroupsMixin, Layer2Mixin, AddressingMixin, RoutingMixin, HAMixin, 
             "ifaces": {k: asdict(v) for k, v in self.ifaces.items()},
             "dhcp_off": sorted(self.dhcp_off),
             "clusters": self.clusters,
+            "cluster_modes": self.cluster_modes,
             "stp_off": sorted(self.stp_off, key=lambda d: (d[0], int(d[1:]))),
             "stp_priority": self.stp_priority,
         }, indent=2)
@@ -133,6 +134,7 @@ class Network(GroupsMixin, Layer2Mixin, AddressingMixin, RoutingMixin, HAMixin, 
                     pass          # address from an older format: re-learned on load
         net.dhcp_off = set(data.get("dhcp_off", [])) & set(net.devices)
         net.clusters = {c: p for c, p in data.get("clusters", {}).items() if c in net.groups}
+        net.cluster_modes = {c: m for c, m in data.get("cluster_modes", {}).items() if c in net.clusters}
         net.stp_off = set(data.get("stp_off", [])) & set(net.devices)
         net.stp_priority = {d: int(v) for d, v in data.get("stp_priority", {}).items() if d in net.devices}
         return net

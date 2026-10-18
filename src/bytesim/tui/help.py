@@ -45,7 +45,8 @@ HELP = """\
   [cyan]<id> <id> role=[/]data|control|control-backup|fabric   cable with a role (control = heartbeat only, ═)
   [cyan]role[/] <id:port>|<id> <id> <role>       change a cable's role  (fabric = router↔router data, ━)
   [cyan]fail[/] <id> | <id:port> | <id> <id>     kill a device or cable(s) · [cyan]restore[/] … | all
-  [cyan]cluster[/] <name> <routers…> \\[policy=none|quorum|witness]   HA pair/group sharing gateway host 254
+  [cyan]cluster[/] <name> <routers…> \\[policy=none|quorum|witness] \\[mode=active-active|active-passive]
+                                    HA pair/group sharing gateway host 254; active-passive: only the active forwards
   [cyan]cluster[/] <name>  ·  [cyan]clusters[/]  ·  [cyan]uncluster[/] <name>  ·  [cyan]demo ha[/]
   [cyan]undo[/] \\[n] · [cyan]redo[/] \\[n] · [cyan]history[/]   step back through changes (u / U on the canvas)
 [b]Canvas keys[/]  arrows move (shift = x4) · tab cycle · a arrange · x delete · u undo · U redo

@@ -155,7 +155,8 @@ def _clone_equivalent(net: Network, a: str, b: str, phi: dict[str, str]) -> bool
 
     def same_tree(ga: str, gb: str) -> bool:
         ma, mb = net.groups[ga], net.groups[gb]
-        if len(ma) != len(mb) or net.clusters.get(ga) != net.clusters.get(gb):
+        if (len(ma) != len(mb) or net.clusters.get(ga) != net.clusters.get(gb)
+                or net.cluster_modes.get(ga) != net.cluster_modes.get(gb)):
             return False
         for x, y in zip(ma, mb):
             if x in net.groups:
@@ -405,7 +406,8 @@ def render(net: Network, subs: list[Substitution], mode: str = "readable") -> tu
                 if g in net.clusters:
                     router = next((m for m in net.groups[g] if m in net.devices and net.is_router(m)), None)
                     if router:
-                        out.append(f"cluster {g} {router} policy={net.clusters[g]}")
+                        mode = f" mode={net.cluster_modes[g]}" if g in net.cluster_modes else ""
+                        out.append(f"cluster {g} {router} policy={net.clusters[g]}{mode}")
                     else:
                         limitations.append(f"cluster {g} has no router directly in it, so `cluster` "
                                            f"can't mark it (policy {net.clusters[g]})")

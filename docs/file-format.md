@@ -17,6 +17,7 @@ template-based YAML format, see [topology-format.md](topology-format.md).
   ],
   "groups":   { "dc1": ["fab1", "rfab1"], "rfab1": ["r1", "r2"], "fab1": ["s1", "s2"] },
   "clusters": { "rfab1": "witness" },
+  "cluster_modes": { "rfab1": "active-passive" },
   "ifaces": {
     "c1:1": { "mode": "dhcp", "net": 1, "host": 10, "gw": 254, "via": "dhcp" }
   },
@@ -33,6 +34,7 @@ template-based YAML format, see [topology-format.md](topology-format.md).
 | `links[]` | two ends (`a`/`pa`, `b`/`pb`; ports start at 1), `role` (`data`, `control`, `control-backup`, `fabric`) and `up` |
 | `groups` | group → members, in order. A member is a device id or another group's name (groups nest) |
 | `clusters` | groups that are HA clusters → split policy (`none`, `quorum`, `witness`) |
+| `cluster_modes` | clusters where only the active member forwards → `active-passive` (absent: active-active) |
 | `ifaces` | `"device:port"` → address config. `mode`: `dhcp`, `adhoc`, `static`, `auto` (routers) or `none`. `net`/`host`: the address. `gw`: the gateway's host number on the same network (254 = cluster virtual gateway). `via`: how the current address was obtained |
 | `dhcp_off` | routers and gateways whose DHCP server is switched off |
 | `stp_off` | switches with spanning tree switched off (every other switch runs it) |
