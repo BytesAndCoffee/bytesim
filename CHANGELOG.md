@@ -49,4 +49,9 @@ First release.
 - MLAG (`mlag <group>`, like vPC): a group of peer-linked switches acts as one logical switch,
   so a device's cables to several of them can be bundled (`lag g1 fab1`, found by `lag`).
   Local forwarding preference and vPC loop avoidance included.
+- Cabling-pattern commands (`mesh`, `zip`, `parallel`, `chain`, `ring`), sharing one
+  implementation with the YAML link macros; `ports` and `mlag` take several devices / groups.
+- Shorter `export script`: cabling patterns, runs of `add` with port fixes, one `mlag` line,
+  `lag auto`, and clones of groups that contain MLAG domains (a 48-device MLAG fabric went
+  from 168 to 80 commands).
 - JSON save and load; a `bytesim` command with `--demo` and `--run`.

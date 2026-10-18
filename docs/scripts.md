@@ -61,8 +61,9 @@ You don't have to compare by hand. ByteSim compares every script before giving
 it to you (see [Verified, always](#verified-always)).
 
 For a bigger example, `load demo4_topology.yaml` (three sites and a transit
-fabric). `export script shortest` rebuilds its 44 devices and 86 cables in 76
-commands instead of 129, using `copy` for repeated fabrics and offices.
+fabric). `export script shortest` rebuilds its 44 devices and 86 cables in 49
+commands instead of 122, using `copy` for repeated fabrics and offices and
+cabling patterns like `mesh` for the rest.
 
 ## What a script rebuilds
 
@@ -111,6 +112,18 @@ example is an HA cluster with no router directly in its group, because
   is cabled to X and Y.
 - **`ports copy A(X, Y) B(P, Q)`** cables an existing B to P and Q the way A is
   cabled to X and Y. Devices are paired by position in each group.
+- **Cabling patterns** replace runs of cables: `mesh A B` (every device of A to
+  every device of B, where A or B is a group or a list like `g1,g2,r2`),
+  `ring fab1` and `parallel s4 s6 2`. A pattern takes each device's next free
+  port, so it's placed where those ports come out right. That's either where its
+  first cable would be, or after the `ports copy` lines, ordered so lower ports
+  are made first.
+- **Devices** are added in runs: `add s 7 23` followed by
+  `ports s4 s6 s13 8` for the odd ones out, when that's shorter than one `add`
+  per port count.
+- **MLAG domains** are declared in one line (`mlag fab1 fab2 …`), and when the
+  bundles are exactly the spans `lag auto` would make, that one command replaces
+  a `lag` line per bundle.
 
 A quick structural check finds candidates. Each candidate is then tried for
 real, by writing the script with it and replaying it. It's kept only if the

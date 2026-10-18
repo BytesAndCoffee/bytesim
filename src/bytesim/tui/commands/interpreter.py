@@ -52,6 +52,7 @@ class Interpreter(CommandHost):
         handler = self._commands.get(word)
         if handler is None:
             raise NetError(f"unknown command {word!r} — type help")
+        self._macro_word = word                  # which alias was typed (the macros share a handler)
         getattr(self, handler)(args, opts)
 
     @staticmethod

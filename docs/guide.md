@@ -641,7 +641,8 @@ them, and a group name on its own selects the group.
 | `<id> <id>` / `link a b [role=]` | `connect`, `ln`, `cable` | cable two devices |
 | `unlink <id>[:port] [id]` | `disconnect`, `cut` | remove cables |
 | `del <id> …` | `rm`, `delete`, `remove` | delete devices |
-| `ports <id> <n>` | `nics`, `resize` | change the port count |
+| `ports <id…> <n>` | `nics`, `resize` | change the port count of one or more devices |
+| `mesh A B`, `zip A B`, `parallel a b n`, `chain x…`, `ring x…` | | cabling patterns; a name is a device, a group (its devices in order) or `a,b,c`; `role=` applies to all |
 | `role <cable> <role>` | | change a cable's role |
 | `fail …` / `restore … \| all` | `down` / `up`, `repair` | inject or clear failures |
 | `group <name> [members]` | | create, extend or select a group |
@@ -662,7 +663,7 @@ them, and a group name on its own selects the group.
 | `traffic on [rate] [seed=] [hosts=] [mix=]`, `traffic [off\|rate n\|reset]` | | random background traffic and statistics |
 | `broadcast <id[:port]>` | `bcast`, `flood` | flood one frame (storms in a live loop) |
 | `lag`, `lag auto`, `lag <switch\|domain> <switch\|router\|gateway\|domain>`, `unlag …`, `lags` | | find and bundle aggregatable spans |
-| `mlag <group>`, `unmlag <group>`, `mlags` | | make a group of switches act as one (needs peer links) |
+| `mlag <group…>`, `unmlag <group>`, `mlags` | | make a group of switches act as one (needs peer links) |
 | `stp [on\|off]`, `stp <switch…> on\|off`, `stp priority <switch> <n>` | | spanning tree |
 | `renumber [auto] bfs\|dfs [root]`, `renumber off` | `rename` | renumber ids in traversal order |
 | `auto` | `arrange`, `layout` | re-arrange and keep arranging |

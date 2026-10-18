@@ -171,3 +171,54 @@ def test_scripts_run_with_comments_and_report_the_failing_line():
     assert len(net.links) == 1
     with pytest.raises(NetError, match="line 2 .*no such device"):
         replay("add s 4 1\ns1 s9\n")
+
+
+# ---- shorter scripts: patterns, batched devices, MLAG -----------------------------------
+def commands_of(res):
+    return [l for l in res.script.splitlines() if l and not l.startswith("#")]
+
+
+def test_cabling_patterns_become_macros():
+    net = build("add s 8 3", "add r 4 2", "group fab s1 s2 s3", "group up r1 r2",
+                "s1 r1", "s1 r2", "s2 r1", "s2 r2", "s3 r1", "s3 r2",       # full mesh
+                "s1 s2", "s2 s3", "s3 s1")                                   # ring
+    res = roundtrip(net, "shortest")
+    cmds = commands_of(res)
+    assert any(c.startswith("mesh ") for c in cmds) and any(c.startswith("ring ") for c in cmds), res.script
+    assert res.commands < res.explicit_commands
+    res = roundtrip(build("add s 4 2", "s1 s2", "s1 s2", "s1 s2"), "shortest")
+    assert "parallel s1 s2 3" in commands_of(res), res.script
+
+
+def test_a_macro_waits_for_the_ports_below_it():
+    # fab's ring uses ports 5–6, after a copied boundary takes 1–4: it must come after the copy
+    net = build("add s 6 3", "add c 1 8", "group fab s1 s2 s3", "group h1 c1 c2 c3", "group h2 c4 c5 c6",
+                "s1 c1", "s2 c2", "s3 c3", "s1 c4", "s2 c5", "s3 c6",
+                "s1:5 s2:5", "s2:6 s3:5", "s3:6 s1:6")
+    roundtrip(net, "shortest")
+    roundtrip(net, "readable")
+
+
+def test_mixed_port_counts_are_one_add_and_a_fix():
+    net = build("add s 5 5", "ports s2 s4 8")
+    res = roundtrip(net, "shortest")
+    assert commands_of(res)[:2] == ["add s 5 5", "ports s2 s4 8"], res.script
+
+
+def test_mlag_domains_are_one_line_and_bundles_lag_auto():
+    cmds = ["add g 4 2", "add s 6 4", "group fab1 s1 s2", "group fab2 s3 s4", "s1 s2", "s3 s4",
+            "g1 s1", "g1 s2", "g2 s3", "g2 s4", "mlag fab1", "mlag fab2", "lag auto"]
+    net = build(*cmds)
+    for mode in MODES:
+        res = roundtrip(net, mode)
+        if mode != "explicit":
+            cmds_out = commands_of(res)
+            assert "mlag fab1 fab2" in cmds_out and "lag auto" in cmds_out, res.script
+
+
+def test_a_group_with_an_mlag_domain_can_still_be_cloned():
+    one = ["add g 4 1", "add s 6 2", "group fab1 s1 s2", "group site1 g1 fab1", "s1 s2", "g1 s1", "g1 s2"]
+    net = build(*one, "clone site1 site2", "mlag fab1", "mlag " + next(
+        g for g in ("fab2", "fab1_2", "fab1-2") if g in build(*one, "clone site1 site2").groups), "lag auto")
+    res = roundtrip(net, "shortest")
+    assert any(c.startswith("clone ") for c in commands_of(res)), res.script

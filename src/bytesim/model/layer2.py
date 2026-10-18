@@ -67,8 +67,8 @@ class Layer2Mixin(NetworkBase):
             return f"{a} and {b} have {n} data cable{'s' if n != 1 else ''} between them: it takes at least two"
         return None
 
-    def aggregatable(self) -> list[tuple[str, str, int]]:
-        """Parallel spans that could be bundled but aren't: (a, b, cables), switch first."""
+    def aggregatable(self, include_bundled: bool = False) -> list[tuple[str, str, int]]:
+        """Parallel spans that could be bundled (but aren't, unless include_bundled)."""
         counts: dict[frozenset, int] = {}
         for l in self.links:
             ea, eb = self.end(l.a), self.end(l.b)
@@ -78,7 +78,7 @@ class Layer2Mixin(NetworkBase):
         out = []
         for pair, n in counts.items():
             a, b = sorted(pair, key=self._end_order)
-            if pair not in self.lags and self.lag_problem(a, b) is None:
+            if (include_bundled or pair not in self.lags) and self.lag_problem(a, b) is None:
                 out.append((a, b, n))
         return sorted(out, key=lambda t: (self._end_order(t[0]), self._end_order(t[1])))
 

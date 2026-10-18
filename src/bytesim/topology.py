@@ -43,6 +43,7 @@ import yaml
 
 from .constants import ALIASES, AUTO, CLUSTER_MODES, GROUP_NAME, KINDS, POLICIES, RANK, REF, ROLES
 from .model import NetError, Network
+from .model.macros import macro_pairs
 from .model.types import Device, Iface
 
 SCHEMA = "bytesim/topology-v1"
@@ -146,33 +147,22 @@ class _Builder:
             if len(ops) != 1:
                 raise NetError(f"{here}: one of connect, mesh, zip, parallel, chain, ring")
             op, args = ops[0], item[ops[0]]
-            pairs: list[tuple[tuple[str, int | None], tuple[str, int | None]]] = []
-            if op in ("connect", "mesh", "zip"):
-                if not (isinstance(args, list) and len(args) == 2):
-                    raise NetError(f"{here}: {op} takes two names")
-                a, b = (self._resolve(x, roles, here) for x in args)
-                if op == "connect":
-                    if len(a) != 1 or len(b) != 1:
-                        raise NetError(f"{here}: connect joins single devices (use mesh or zip for sets)")
-                    pairs = [(a[0], b[0])]
-                elif op == "mesh":
-                    pairs = [(x, y) for x in a for y in b]
+            try:
+                if op == "parallel":
+                    if not (isinstance(args, list) and len(args) == 3 and isinstance(args[2], int)):
+                        raise NetError("parallel takes [a, b, count]")
+                    sides = [self._resolve(x, roles, here) for x in args[:2]]
+                    pairs = macro_pairs(op, sides, args[2])
+                elif op in ("connect", "mesh", "zip"):
+                    if not (isinstance(args, list) and len(args) == 2):
+                        raise NetError(f"{op} takes two names")
+                    pairs = macro_pairs(op, [self._resolve(x, roles, here) for x in args])
+                elif op in ("chain", "ring"):
+                    pairs = macro_pairs(op, [self._resolve(args, roles, here)])
                 else:
-                    if len(a) != len(b):
-                        raise NetError(f"{here}: zip needs equal sizes ({len(a)} vs {len(b)})")
-                    pairs = list(zip(a, b))
-            elif op == "parallel":
-                if not (isinstance(args, list) and len(args) == 3 and isinstance(args[2], int)):
-                    raise NetError(f"{here}: parallel takes [a, b, count]")
-                a, b = (self._resolve(x, roles, here) for x in args[:2])
-                if len(a) != 1 or len(b) != 1:
-                    raise NetError(f"{here}: parallel joins two single devices")
-                pairs = [(a[0], b[0])] * args[2]
-            elif op in ("chain", "ring"):
-                seq = self._resolve(args, roles, here)
-                pairs = list(zip(seq, seq[1:])) + ([(seq[-1], seq[0])] if op == "ring" and len(seq) > 2 else [])
-            else:
-                raise NetError(f"{here}: unknown macro {op!r}")
+                    raise NetError(f"unknown macro {op!r}")
+            except NetError as e:
+                raise NetError(f"{here}: {e}") from None
             for (da, pa), (db, pb) in pairs:
                 try:
                     self.net.connect(da, pa, db, pb, role)

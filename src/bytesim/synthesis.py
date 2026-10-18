@@ -28,7 +28,7 @@ from __future__ import annotations
 
 import time
 from collections import Counter
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from itertools import combinations, permutations
 
 from .constants import KINDS, RANK
@@ -41,21 +41,26 @@ READABLE_MIN_SAVING = 3        # readable mode only reuses structure when it sav
 
 @dataclass
 class Limits:
-    max_candidates: int = 60   # candidate substitutions tried (each costs one replay)
-    max_seconds: float = 8.0   # total optimisation time
+    max_candidates: int = 400  # candidate substitutions tried (each costs one replay)
+    max_seconds: float = 10.0  # total optimisation time
     max_group_size: int = 300  # larger groups aren't considered for reuse
 
 
 @dataclass
 class Substitution:
-    kind: str                                  # clone | copy | ports
+    kind: str                                  # clone | copy | ports | macro
     src: str
     dst: str
     pairs: list[tuple[str, str]] = field(default_factory=list)
     claims: Counter = field(default_factory=Counter)   # (dst device, endpoint device, role) cables it makes
     saves: int = 0
+    text: str = ""                             # macro: the command itself
+    links: tuple[int, ...] = ()                # macro: the cables it makes (indices into net.links)
+    late: bool = False                         # macro: placed after the port copies, not at its first cable
 
     def command(self) -> str:
+        if self.kind == "macro":
+            return self.text
         if self.kind == "clone":
             return f"clone {self.src} {self.dst}"
         old = ",".join(o for o, _ in self.pairs)
@@ -64,6 +69,8 @@ class Substitution:
         return f"{prefix} {self.src}({old}) {self.dst}({new})"
 
     def describe(self) -> str:
+        if self.kind == "macro":
+            return f"{len(self.links)} cables in one pattern"
         if self.kind == "clone":
             return f"{self.dst} has the same structure as {self.src}: clone it"
         ends = ", ".join(f"{o}→{n}" for o, n in self.pairs)
@@ -169,9 +176,7 @@ def _clone_equivalent(net: Network, a: str, b: str, phi: dict[str, str]) -> bool
     if not same_tree(a, b):
         return False
     inside_a, inside_b = set(phi), set(phi.values())
-    if net.mlag_domains and any(net.end(d) != d or any(d in p for p in net.lags if p & net.mlag_domains)
-                                for d in inside_a | inside_b):
-        return False                       # MLAG domains and their bundles are written out explicitly
+    # MLAG domains and their bundles aren't cloned: they're declared at the end, by name.
     lags_a = {frozenset(phi[d] for d in p) for p in net.lags if p <= inside_a}
     if lags_a != {p for p in net.lags if p <= inside_b}:
         return False
@@ -257,6 +262,128 @@ def _explicit_cost(net: Network, g: str) -> int:
             + sum(1 for x in _subtree(net, g) if x in net.clusters))
 
 
+def _macro_candidates(net: Network) -> list[Substitution]:
+    """Cables that follow a pattern a single macro would make: meshes between groups (or a
+    group and the devices cabled to all of it), rings around a group, parallel cables."""
+    by_pair: dict[tuple[frozenset, str], list[int]] = {}
+    for i, l in enumerate(net.links):
+        by_pair.setdefault((frozenset((l.a, l.b)), l.role), []).append(i)
+
+    def pick(x: str, y: str, role: str, taken: set[int]) -> int | None:
+        return next((i for i in by_pair.get((frozenset((x, y)), role), []) if i not in taken), None)
+
+    def name(devs: list[str]) -> str:
+        return ",".join(devs)
+
+    def make(text: str, links: list[int], role: str) -> Substitution | None:
+        last: dict[str, int] = {}              # a macro takes each device's lowest free port, in order
+        for i in links:
+            l = net.links[i]
+            for d, port in ((l.a, l.pa), (l.b, l.pb)):
+                if port <= last.get(d, 0):
+                    return None
+                last[d] = port
+        suffix = f" role={role}" if role != "data" else ""
+        return Substitution("macro", "", "", saves=len(links) - 1, text=text + suffix, links=tuple(links))
+
+    out = [replace(m, late=late) for m in _macro_patterns(net, by_pair, pick, name, make) if m
+           for late in (False, True)]
+    return out
+
+
+def _macro_patterns(net: Network, by_pair, pick, name, make) -> list[Substitution]:
+    out: list[Substitution] = []
+    flat = [(g, [m for m in net.groups[g] if m in net.devices]) for g in net.groups if not net.subgroups(g)]
+    for role in ("data", "control", "control-backup", "fabric"):
+        pairs = [(x, y) for x in flat for y in flat]
+        for g, devs in flat:                    # a group and everything cabled to all of it
+            inside = set(devs)
+            near = [d.id for d in net.sorted_devices() if d.id not in inside
+                    and all(pick(d.id, m, role, set()) is not None for m in devs)]
+            if near and len(devs) > 1:
+                pairs += [((g, devs), (name(near), near)), ((name(near), near), (g, devs))]
+        for (gx, xs), (gy, ys) in pairs:
+            if gx == gy or set(xs) & set(ys) or len(xs) * len(ys) < 2:
+                continue
+            taken: set[int] = set()
+            links = []
+            for x in xs:
+                for y in ys:
+                    i = pick(x, y, role, taken)
+                    if i is None:
+                        break
+                    taken.add(i)
+                    links.append(i)
+                else:
+                    continue
+                break
+            else:
+                out.append(make(f"mesh {gx} {gy}", links, role))
+        for g, devs in flat:
+            if len(devs) >= 3:
+                taken = set()
+                links = []
+                for a, b in zip(devs, devs[1:] + devs[:1]):
+                    i = pick(a, b, role, taken)
+                    if i is None:
+                        break
+                    taken.add(i)
+                    links.append(i)
+                else:
+                    out.append(make(f"ring {g}", links, role))
+    for (pair, role), idx in by_pair.items():
+        if len(idx) >= 2 and len(pair) == 2:
+            a, b = sorted(pair, key=_order)
+            out.append(make(f"parallel {a} {b} {len(idx)}", idx, role))
+    return out
+
+
+def _late_order(net: Network, items: list[Substitution]) -> list[Substitution]:
+    """Port copies and late macros in an order that works: whatever makes the cables a copy
+    reads goes first; otherwise, of two that cable the same device, the one whose ports
+    there are lower (macros take the next free port, copies the original or else the next
+    free one). Ties (and cycles) keep the order they were chosen in."""
+    def made(x: Substitution) -> set[frozenset]:
+        if x.kind == "macro":
+            return {frozenset((net.links[i].a, net.links[i].b)) for i in x.links}
+        return {frozenset((d, e)) for d, e, _ in x.claims}
+
+    def read(x: Substitution) -> set[frozenset]:
+        if x.kind != "ports":
+            return set()
+        inside = net.devices_in(x.src)
+        ends = {e for old, _ in x.pairs for e in (net.devices_in(old) if old in net.groups else [old])}
+        return {frozenset((d, e)) for d in inside for e in ends}
+
+    def low(x: Substitution) -> dict[str, int]:
+        out: dict[str, int] = {}
+        links = x.links if x.kind == "macro" else [
+            i for i, l in enumerate(net.links) if (l.a, l.b, l.role) in x.claims or (l.b, l.a, l.role) in x.claims]
+        for i in links:
+            l = net.links[i]
+            for d, port in ((l.a, l.pa), (l.b, l.pb)):
+                out[d] = min(port, out.get(d, port))
+        return out
+
+    info = [(made(x), read(x), low(x)) for x in items]
+
+    def before(a: int, b: int) -> bool:
+        (ma, ra, la), (mb, rb, lb) = info[a], info[b]
+        if ma & rb:
+            return True
+        if mb & ra:
+            return False
+        return any(d in lb and port < lb[d] for d, port in la.items())
+
+    left = list(range(len(items)))
+    order = []
+    while left:
+        k = next((k for k in left if not any(j != k and before(j, k) for j in left)), left[0])
+        left.remove(k)
+        order.append(items[k])
+    return order
+
+
 def candidates(net: Network, limits: Limits) -> list[Substitution]:
     """Every reuse the network allows, best saving first (deterministic order)."""
     out: list[Substitution] = []
@@ -279,8 +406,11 @@ def candidates(net: Network, limits: Limits) -> list[Substitution]:
                 rw = _best_rewire(net, a, b, dict(zip(da, db)))
                 if rw and sum(rw[1].values()) > 1:
                     out.append(Substitution("ports", a, b, rw[0], rw[1], sum(rw[1].values()) - 1))
-    rank = {"copy": 0, "clone": 1, "ports": 2}
-    out.sort(key=lambda s: (-s.saves, rank[s.kind], list(net.groups).index(s.dst), s.src))
+    out += _macro_candidates(net)
+    rank = {"copy": 0, "clone": 1, "ports": 2, "macro": 3}
+    groups = list(net.groups)
+    out.sort(key=lambda s: (-s.saves, rank[s.kind], groups.index(s.dst) if s.dst in groups else 0,
+                            s.src, s.text))
     return out
 
 
@@ -309,6 +439,7 @@ def render(net: Network, subs: list[Substitution], mode: str = "readable") -> tu
     clones = sorted((s for s in subs if s.kind in ("clone", "copy")),
                     key=lambda s: min(_order(d) for d in net.devices_in(s.dst)))
     copies = [s for s in subs if s.kind == "ports"]
+    macros = [s for s in subs if s.kind == "macro"]
     produced: dict[str, Substitution] = {d: s for s in clones for d in net.devices_in(s.dst)}
     produced_groups = {g for s in clones for g in _subtree(net, s.dst)}
 
@@ -327,6 +458,14 @@ def render(net: Network, subs: list[Substitution], mode: str = "readable") -> tu
             if n:
                 raise _Infeasible(f"{s.command()} claims cables that aren't there")
 
+    macro_of: dict[int, Substitution] = {}
+    for m in macros:
+        for i in m.links:
+            if i in made or i in macro_of:
+                raise _Infeasible(f"{m.text} overlaps cables already made another way")
+            macro_of[i] = m
+    emitted_macros: set[int] = set()
+
     present = {k: {d.num: d for d in net.devices.values() if d.kind == k} for k in KINDS}
     top = {k: max([net.counters[k], *present[k]]) for k in KINDS}
     nxt = {k: 1 for k in KINDS}
@@ -339,9 +478,11 @@ def render(net: Network, subs: list[Substitution], mode: str = "readable") -> tu
     def span(pair: frozenset) -> set[str]:
         return {d for e in pair for d in (net.devices_in(e) if e in net.mlag_domains else [e])}
 
-    def lag_cmds(devs: set[str]) -> list[str]:
+    def lag_cmds(devs: set[str], final: bool = False) -> list[str]:
         out = []
         for pair in sorted(net.lags, key=lambda q: sorted(q, key=net._end_order)):
+            if not final and pair & net.mlag_domains:
+                continue                   # needs its domain, which is declared at the end
             if span(pair) <= devs and pair not in bundled:
                 bundled.add(pair)
                 out.append(f"lag {' '.join(sorted(pair, key=net._end_order))}")
@@ -355,11 +496,27 @@ def render(net: Network, subs: list[Substitution], mode: str = "readable") -> tu
                 raise _Infeasible("a clone's ids would be taken by explicit devices")
             m = n
             if n in present[k]:
-                ports = present[k][n].nports
-                while (m + 1 <= upto and m + 1 in present[k] and present[k][m + 1].nports == ports
-                       and m + 1 - n < 100 and f"{k}{m + 1}" not in produced):
+                while (m + 1 <= upto and m + 1 in present[k] and m + 1 - n < 100
+                       and f"{k}{m + 1}" not in produced):
                     m += 1
-                lines.append(f"add {k} {ports} {m - n + 1}")
+                run = [present[k][i] for i in range(n, m + 1)]
+                pieces = 1 + sum(1 for a, b in zip(run, run[1:]) if a.nports != b.nports)
+                counts: dict[int, int] = {}
+                for d in run:
+                    counts[d.nports] = counts.get(d.nports, 0) + 1
+                base = max(counts, key=lambda c: (counts[c], -c))
+                if len(counts) < pieces:   # one add, then fix the odd ones out
+                    lines.append(f"add {k} {base} {len(run)}")
+                    for count in sorted(c for c in counts if c != base):
+                        lines.append(f"ports {' '.join(d.id for d in run if d.nports == count)} {count}")
+                else:
+                    i = 0
+                    while i < len(run):
+                        j = i
+                        while j + 1 < len(run) and run[j + 1].nports == run[i].nports:
+                            j += 1
+                        lines.append(f"add {k} {run[i].nports} {j - i + 1}")
+                        i = j + 1
                 created.update(f"{k}{i}" for i in range(n, m + 1))
             else:
                 while m + 1 <= upto and m + 1 not in present[k] and m + 1 - n < 100:
@@ -435,6 +592,20 @@ def render(net: Network, subs: list[Substitution], mode: str = "readable") -> tu
         l = net.links[i]
         return f"{l.a}:{l.pa} {l.b}:{l.pb}" + (f" role={l.role}" if l.role != "data" else "")
 
+    def emit(i: int) -> list[str]:
+        """A cable's command, or the macro that makes it (once, along with its other cables)."""
+        if i in done_links:
+            return []
+        m = macro_of.get(i)
+        if m is None:
+            done_links.add(i)
+            return [cable(i)]
+        if id(m) in emitted_macros or m.late:
+            return []
+        emitted_macros.add(id(m))
+        done_links.update(m.links)
+        return [m.text]
+
     def cables_for(devs: set[str], others: set[str] | None = None) -> list[str]:
         out = []
         for i, l in enumerate(net.links):
@@ -443,8 +614,7 @@ def render(net: Network, subs: list[Substitution], mode: str = "readable") -> tu
             inside = l.a in devs and l.b in devs
             crossing = others is not None and ((l.a in devs and l.b in others) or (l.b in devs and l.a in others))
             if inside or crossing:
-                done_links.add(i)
-                out.append(cable(i))
+                out += emit(i)
         return out
 
     # ---- the plan ------------------------------------------------------------
@@ -529,23 +699,30 @@ def render(net: Network, subs: list[Substitution], mode: str = "readable") -> tu
             for key in [g for g in order if g in buckets] + ([None] if None in buckets else []):
                 if len(buckets) > 1:
                     say(f"inside {key}" if key else "between groups")
-                lines.extend(cable(i) for i in buckets[key])
+                for i in buckets[key]:
+                    lines.extend(emit(i))
         else:
-            lines.extend(cable(i) for i in rest)
-        done_links.update(rest)
-    for s in copies:
+            for i in rest:
+                lines.extend(emit(i))
+    for s in _late_order(net, copies + [m for m in macros if m.late]):
         blank()
         say(s.describe())
         lines.append(s.command())
+        done_links.update(s.links)
     if net.mlag_domains:
         blank()
         say("MLAG domains: groups of switches that act as one logical switch")
-        lines.extend(f"mlag {g}" for g in sorted(net.mlag_domains))
-    remaining_lags = lag_cmds(set(net.devices))
+        lines.append("mlag " + " ".join(sorted(net.mlag_domains)))
+    already = set(bundled)
+    remaining_lags = lag_cmds(set(net.devices), final=True)
     if remaining_lags:
         blank()
         say("Link aggregations: parallel cables that act as one link")
-        lines.extend(remaining_lags)
+        every = {frozenset((a, b)) for a, b, _ in net.aggregatable(include_bundled=True)}
+        if every - already == bundled - already:   # exactly the spans `lag auto` would bundle
+            lines.append("lag auto")
+        else:
+            lines.extend(remaining_lags)
     if other or off:
         blank()
         say("Switch and router settings")
@@ -627,7 +804,7 @@ def synthesize(net: Network, mode: str = "readable", limits: Limits | None = Non
                 break
             if cand.saves < floor or _conflicts(net, used, cand):
                 continue
-            if mode == "readable" and _first(net, cand.dst) < _first(net, cand.src):
+            if mode == "readable" and cand.kind != "macro" and _first(net, cand.dst) < _first(net, cand.src):
                 continue                       # readable: later groups follow earlier ones, not back
             tried += 1
             try:
@@ -657,8 +834,12 @@ def _conflicts(net: Network, used: list[Substitution], cand: Substitution) -> bo
         return set(net.devices_in(s.dst)) if s.kind in ("clone", "copy") else set()
 
     mine = devs(cand)
+    if cand.kind == "macro":                   # render() rejects overlaps with other reuses
+        return any(set(cand.links) & set(s.links) for s in used if s.kind == "macro")
     claimed: Counter = Counter()
     for s in used:
+        if s.kind == "macro":
+            continue
         if mine & devs(s) or cand.dst == s.dst and cand.kind != "ports" and s.kind != "ports":
             return True
         if cand.kind in ("clone", "copy") and s.kind in ("clone", "copy") and (

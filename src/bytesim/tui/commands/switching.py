@@ -114,14 +114,17 @@ class SwitchingCommands(CommandHost):
         if not args:
             self.dispatch(["mlags"])
             return
-        if len(args) != 1:
-            raise NetError("usage: mlag <group of switches>   (they need peer links between them)")
-        g = args[0].lower()
-        problem = net.mlag_problem(g)
-        if problem:
-            raise NetError(problem)
-        if g in net.mlag_domains:
-            raise NetError(f"{g} is already an MLAG domain")
+        for g in [a.lower() for a in args]:      # mlag fab1 fab2 …: several domains at once
+            problem = net.mlag_problem(g)
+            if problem:
+                raise NetError(problem)
+            if g in net.mlag_domains:
+                raise NetError(f"{g} is already an MLAG domain")
+            self._declare_mlag(g)
+        self.changed()
+
+    def _declare_mlag(self, g: str) -> None:
+        net = self.net
         net.mlag_domains.add(g)
         # Bundles that ended on one of its switches now end on the domain.
         net.lags = {p for p in (frozenset(net.end(x) if x in net.devices else x for x in q) for q in net.lags)
@@ -133,7 +136,6 @@ class SwitchingCommands(CommandHost):
         for a, b, n in spans:
             other = b if a == g else a
             self.log_msg(f"  [dim]{other}–{g}: {n} cables can now be one link: [b]lag {other} {g}[/b][/]")
-        self.changed()
 
     @command("unmlag")
     def cmd_unmlag(self, args: list[str], opts: dict[str, str]) -> None:

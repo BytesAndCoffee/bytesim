@@ -8,7 +8,9 @@ HELP = """\
   [cyan]<id>[/]                            select device, then move it with arrow keys
   [cyan]unlink[/] <id>\\[:port] \\[id]         remove cable(s)
   [cyan]del[/] <id>                        delete a device
-  [cyan]ports[/] <id> <n>                  change port / NIC count
+  [cyan]ports[/] <id…> <n>                 change port / NIC count, e.g. [i]ports s4 s6 8[/]
+  [cyan]mesh[/] A B · [cyan]zip[/] A B · [cyan]parallel[/] a b n · [cyan]chain[/] x… · [cyan]ring[/] x…   cabling patterns
+                                    A name is a device, a group or a,b,c, e.g. [i]mesh fab1 g1,g2,r2[/], [i]ring fab1[/]
   [cyan]ping[/] <id> <id|addr|internet>    echo request + reply (follows networks + gateways)
   [cyan]unicast[/] <src> <id|addr>         one-way packet to a single device
   [cyan]multicast[/] <src> <ids|groups|all> one packet, copied where paths split, e.g. [i]mcast c1 pcs c8[/]
@@ -41,7 +43,7 @@ HELP = """\
 [b]Loops, STP, storms[/]  switches run spanning tree unless it's switched off for them
   [cyan]broadcast[/] <id\\[:port]>                 flood one frame; into a live loop it becomes a storm
   [cyan]lag[/] (find spans) · [cyan]lag auto[/] · [cyan]lag[/] <switch|domain> <switch|router|gateway|domain> · [cyan]unlag[/] … · [cyan]lags[/]
-  [cyan]mlag[/] <group> · [cyan]unmlag[/] <group> · [cyan]mlags[/]   a group of switches acts as one (peer links needed), like vPC
+  [cyan]mlag[/] <group…> · [cyan]unmlag[/] <group> · [cyan]mlags[/]   a group of switches acts as one (peer links needed), like vPC
                                     bundle parallel cables into one link (no STP blocking, flows spread)
   [cyan]stp[/]  ·  [cyan]stp[/] on|off  ·  [cyan]stp[/] <switch…> on|off  ·  [cyan]stp priority[/] <switch> <n>  ·  [cyan]demo loop[/]
 [b]Roles, failures, HA[/]

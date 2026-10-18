@@ -6,6 +6,7 @@ from pathlib import Path
 from ... import demos
 from ...constants import ALIASES, KINDS, REF, ROLES
 from ...model import Link, NetError, Network
+from ...model.macros import macro_pairs
 from ...topology import dump_topology, load_topology, looks_like_topology
 from ..help import HELP
 from ..theme import ROLE_COLOR
@@ -96,11 +97,52 @@ class TopologyCommands(CommandHost):
         if args and args[0].lower() == "copy":     # ports copy src(old, …) dst(new, …): cabling only
             self.copy_cabling(args[1:])  # type: ignore[attr-defined]
             return
-        if len(args) != 2 or not args[1].isdigit():
-            raise NetError("usage: ports <id> <count>")
-        did, _ = self._ref(args[0])
-        self.net.resize(did, int(args[1]))
-        self.log_msg(f"{did} now has {args[1]} ports")
+        if len(args) < 2 or not args[-1].isdigit():
+            raise NetError("usage: ports <id…> <count>   (e.g. ports s1 s2 s3 7)")
+        ids = [self.net.get(self._ref(t)[0]).id for t in args[:-1]]
+        for did in ids:
+            self.net.resize(did, int(args[-1]))
+        self.log_msg(f"{' '.join(ids)} now {'has' if len(ids) == 1 else 'have'} {args[-1]} ports")
+        self.changed()
+
+    @command("mesh", "zip", "chain", "ring", "parallel")
+    def cmd_macro(self, args: list[str], opts: dict[str, str]) -> None:
+        """Cabling macros: mesh A B · zip A B · chain x… · ring x… · parallel a b n.
+        A name is a device (r1, r1:3), a group (all its devices, in order), or a,b,c."""
+        op = self._macro_word
+        net = self.net
+        role = opts.get("role", "data")
+        if role not in ROLES:
+            raise NetError(f"role must be one of: {', '.join(ROLES)}")
+        usage = {"mesh": "mesh <A> <B>", "zip": "zip <A> <B>", "chain": "chain <x> <y> …",
+                 "ring": "ring <x> <y> …", "parallel": "parallel <a> <b> <count>"}[op]
+        count = None
+        if op == "parallel":
+            if len(args) != 3 or not args[2].isdigit():
+                raise NetError(f"usage: {usage}")
+            count, args = int(args[2]), args[:2]
+        if not args or (op in ("mesh", "zip", "parallel") and len(args) != 2):
+            raise NetError(f"usage: {usage}   [role=…]")
+
+        def ends(tok: str) -> list[tuple[str, int | None]]:
+            out = []
+            for part in [p for p in tok.split(",") if p]:
+                if part.lower() in net.groups:
+                    out += [(d, None) for d in net.devices_in(part.lower())]
+                else:
+                    did, port = self._ref(part)
+                    out.append((net.get(did).id, port))
+            return out
+
+        sides = [ends(t) for t in args]
+        pairs = macro_pairs(op, sides if op in ("mesh", "zip", "parallel") else [sum(sides, [])], count)
+        made = []
+        for (a, pa), (b, pb) in pairs:
+            l = net.connect(a, pa, b, pb, role)
+            made.append(f"{l.a}:{l.pa}–{l.b}:{l.pb}")
+        self.log_msg(f"[green]⇄[/] {op}: {len(made)} cable{'s' if len(made) != 1 else ''}"
+                     + (f" ({role})" if role != "data" else "") + f"  [dim]{' '.join(made[:8])}"
+                     + (" …" if len(made) > 8 else "") + "[/]")
         self.changed()
 
     @command("role")
