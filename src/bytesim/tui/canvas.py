@@ -58,6 +58,7 @@ class NetCanvas(Widget, can_focus=True):
         self.show_addr = True
         self.pan = (0, 0)
         self.packets: list[Packet] = []
+        self._geom: tuple | None = None          # (layout key, cable geometry)
         self.hot_links: Counter[int] = Counter()
         self.flash: dict[str, list] = {}   # device -> [colour, ticks left]
         self._timer = None
@@ -288,46 +289,27 @@ class NetCanvas(Widget, can_focus=True):
         return sorted(self.net.devices.values(), key=lambda d: d.id == self.selected)
 
     def render(self) -> Text:
-        w, h = self.size.width, self.size.height
-        ox, oy = self.pan
-        chars = [[" "] * w for _ in range(h)]
-        styles = [[""] * w for _ in range(h)]
+        with self.net.remembering():
+            return self._draw()
 
-        def put(x: int, y: int, ch: str, st: str) -> None:
-            sx, sy = x - ox, y - oy
-            if 0 <= sx < w and 0 <= sy < h:
-                chars[sy][sx] = ch
-                styles[sy][sx] = st
-
+    def _geometry(self) -> tuple:
+        """Where every cable runs and the glyph mask of each cell: rebuilt only when the
+        layout, the cabling or what's blocked changes, not every animation frame."""
         net = self.net
+        key = (tuple((d.id, d.x, d.y, d.width, d.nports) for d in net.devices.values()),
+               tuple((l.a, l.pa, l.b, l.pb, l.role, l.up) for l in net.links),
+               frozenset(net.stp_blocked))
+        if self._geom is not None and self._geom[0] == key:
+            return self._geom[1]
+        paths: list[list[tuple[int, int]]] = []
         masks: dict[tuple[int, int], int] = {}
-        cell_style: dict[tuple[int, int], str] = {}
-        sides: dict[tuple[str, int], str] = {}
-        hot = set(self.hot_links)
-        if self.selected:
-            hot |= {i for i, l in enumerate(net.links) if l.touches(self.selected)}
-        if self.selected_group:
-            members = set(net.devices_in(self.selected_group))
-            hot |= {i for i, l in enumerate(net.links) if l.a in members or l.b in members}
-
         kinds: dict[tuple[int, int], set[str]] = {}
+        sides: dict[tuple[str, int], str] = {}
         broken: list[tuple[int, int]] = []
-        crawl: list[list[tuple[int, int]]] = []          # storm loops: dots run along them
-        looping = net.loop_links() if net.storming else set()
-        traffic = getattr(self.app, "traffic", None)   # random traffic shades cables by load
         for i, l in enumerate(net.links):
             pts = route(net, l, i)
-            alive = l.up and net.devices[l.a].up and net.devices[l.b].up
+            paths.append(pts)
             blocked = (l.a, l.pa) in net.stp_blocked or (l.b, l.pb) in net.stp_blocked
-            storm = l.a in net.storming or l.b in net.storming
-            if storm and i in looping:
-                crawl.append(pts)
-            heat = traffic.level(l) if traffic is not None else 0.0
-            st = ("red" if not alive or storm else "grey35" if blocked
-                  else "bold yellow" if i in hot
-                  else HEAT[0] if heat > 0.66 else HEAT[1] if heat > 0.33 else HEAT[2] if heat > 0.1
-                  else LAG_COLOR if net.bundle(l) else PEER_COLOR if net.is_peer_link(l)
-                  else ROLE_COLOR[l.role])
             kind = "control" if l.control else "blocked" if blocked else l.role
             for pt in pts:
                 kinds.setdefault(pt, set()).add(kind)
@@ -340,9 +322,53 @@ class NetCanvas(Widget, can_focus=True):
                 below = pt[1] > net.devices[dev_id].y
                 masks[pt] = masks.get(pt, 0) | (N if below else S)
                 sides[(dev_id, port)] = "bottom" if below else "top"
-            for pt in pts:
-                if i in hot or pt not in cell_style:
-                    cell_style[pt] = st
+        geom = (paths, masks, kinds, sides, broken)
+        self._geom = (key, geom)
+        return geom
+
+    def _draw(self) -> Text:
+        w, h = self.size.width, self.size.height
+        ox, oy = self.pan
+        chars = [[" "] * w for _ in range(h)]
+        styles = [[""] * w for _ in range(h)]
+
+        def put(x: int, y: int, ch: str, st: str) -> None:
+            sx, sy = x - ox, y - oy
+            if 0 <= sx < w and 0 <= sy < h:
+                chars[sy][sx] = ch
+                styles[sy][sx] = st
+
+        net = self.net
+        paths, masks, kinds, sides, broken = self._geometry()
+        cell_style: dict[tuple[int, int], str] = {}
+        hot = set(self.hot_links)
+        if self.selected:
+            hot |= {i for i, l in enumerate(net.links) if l.touches(self.selected)}
+        if self.selected_group:
+            members = set(net.devices_in(self.selected_group))
+            hot |= {i for i, l in enumerate(net.links) if l.a in members or l.b in members}
+
+        crawl: list[list[tuple[int, int]]] = []          # storm loops: dots run along them
+        looping = net.loop_links() if net.storming else set()
+        traffic = getattr(self.app, "traffic", None)   # random traffic shades cables by load
+        for i, l in enumerate(net.links):
+            pts = paths[i]
+            alive = l.up and net.devices[l.a].up and net.devices[l.b].up
+            blocked = (l.a, l.pa) in net.stp_blocked or (l.b, l.pb) in net.stp_blocked
+            storm = l.a in net.storming or l.b in net.storming
+            if storm and i in looping:
+                crawl.append(pts)
+            heat = traffic.level(l) if traffic is not None else 0.0
+            st = ("red" if not alive or storm else "#585858" if blocked
+                  else "bold yellow" if i in hot
+                  else HEAT[0] if heat > 0.66 else HEAT[1] if heat > 0.33 else HEAT[2] if heat > 0.1
+                  else LAG_COLOR if net.bundle(l) else PEER_COLOR if net.is_peer_link(l)
+                  else ROLE_COLOR[l.role])
+            if i in hot:
+                cell_style.update(dict.fromkeys(pts, st))
+            else:
+                for pt in pts:
+                    cell_style.setdefault(pt, st)
         frames = []
         for g in sorted(net.groups, key=lambda g: len(net.chain(g))):   # outer frames first
             sel = g == self.selected_group
@@ -448,7 +474,7 @@ class NetCanvas(Widget, can_focus=True):
             cabled = any(net.link_index(d.id, p) is not None for p in range(1, d.nports + 1))
             return ("no addr", "red", y) if cabled else ("", "", 0)
         _, ifc = addrs[0]
-        st = {"adhoc": "yellow", "static": "cyan"}.get(ifc.via, "grey70")
+        st = {"adhoc": "yellow", "static": "cyan"}.get(ifc.via, "#b2b2b2")
         return fmt(ifc.addr) + (f"+{len(addrs) - 1}" if len(addrs) > 1 else ""), st, y
 
     def _draw_device(self, d: Device, put, sides: dict, selected: bool, flash=None) -> None:
@@ -493,4 +519,4 @@ class NetCanvas(Widget, can_focus=True):
                 put(px, y + 2, "●", f"bold {d.color}")
                 put(px, y + 3 if side == "bottom" else y, dn if side == "bottom" else up, bst)
             else:
-                put(px, y + 2, "○", "grey42")
+                put(px, y + 2, "○", "#6c6c6c")

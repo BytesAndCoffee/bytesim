@@ -14,12 +14,14 @@ from dataclasses import dataclass, field
 
 from ..constants import RANK
 from .base import NetworkBase
+from .layer2 import structure_memo
 from .types import Link
 
 DEFAULT_PRIORITY = 32768
 
 
 @dataclass
+
 class Flood:
     """What happened to one broadcast frame, generation by generation."""
     source: tuple[str, int]
@@ -130,6 +132,7 @@ class SpanningTreeMixin(NetworkBase):
         return {i for i in trunks if stands_for(i) in loops}
 
     # ---- spanning tree ---------------------------------------------------
+    @structure_memo
     def stp_compute(self) -> tuple[set[tuple[str, int]], dict[str, str], dict[str, int]]:
         """Blocked ports, each switch's root bridge, and each switch's root port.
 
@@ -260,6 +263,7 @@ class SpanningTreeMixin(NetworkBase):
         return notes
 
     # ---- flooding ----------------------------------------------------------
+    @structure_memo
     def flood(self, src: tuple[str, int]) -> Flood:
         """Send one broadcast frame out of an interface and follow every copy.
 

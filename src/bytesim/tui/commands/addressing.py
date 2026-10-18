@@ -28,7 +28,7 @@ class AddressCommands(CommandHost):
         for nic in self._nics(args):
             ifc = self.net.iface(*nic)
             if ifc.addr:
-                self.log_msg(f"[gold1]DHCP[/] {self._ifname(nic)} RELEASE {fmt(ifc.addr)}")
+                self.log_msg(f"[#ffd700]DHCP[/] {self._ifname(nic)} RELEASE {fmt(ifc.addr)}")
             ifc.mode = "none"
             ifc.clear()
         self.changed()
@@ -118,31 +118,31 @@ class AddressCommands(CommandHost):
         ifc.mode = "dhcp"
         mac = net.devices[nic[0]].mac(nic[1])
         if net.storm_near(nic[0]):
-            self.log_msg(f"[b gold1]DHCP[/] {name} [red]DISCOVER lost: the links are saturated"
+            self.log_msg(f"[b #ffd700]DHCP[/] {name} [red]DISCOVER lost: the links are saturated"
                          f"{self.storm_hint(nic[0])}[/]")  # type: ignore[attr-defined]
             return
         fl = net.flood(nic)
         if fl.storm:
-            self.log_msg(f"[b gold1]DHCP[/] {name} [dim]{mac}[/] DISCOVER → broadcast")
+            self.log_msg(f"[b #ffd700]DHCP[/] {name} [dim]{mac}[/] DISCOVER → broadcast")
             self.set_off_storm(fl, f"the DHCP DISCOVER from {name}")  # type: ignore[attr-defined]
             self.log_msg("  [red]DHCP failed: the DISCOVER drowned in the storm it caused[/]")
             return
         kind, server = net.lease(nic)
         net.learn_flood(fl)
         reached = len(fl.delivered)
-        self.log_msg(f"[b gold1]DHCP[/] {name} [dim]{mac}[/] DISCOVER → broadcast "
+        self.log_msg(f"[b #ffd700]DHCP[/] {name} [dim]{mac}[/] DISCOVER → broadcast "
                      f"(reaches {reached} interface{'s' if reached != 1 else ''})")
 
         def done(back: list[tuple[str, int]] | None) -> None:
             if back:
                 c.cool([li for _, li in back[1:]])
-            c.flash_device(nic[0], "gold1" if server else "yellow")
+            c.flash_device(nic[0], "#ffd700" if server else "yellow")
             if kind == "adhoc":
                 self.log_msg(f"  [yellow]no DHCP server answered: took free address "
                              f"{fmt(ifc.addr)} on network {ifc.net} (ad-hoc)[/]")
             else:
                 verb = "ACK (renewed)" if kind == "renew" else "OFFER → REQUEST → ACK"
-                self.log_msg(f"  [gold1]{verb}[/] from {server[0]} {fmt(net.addr_of(server))}: "
+                self.log_msg(f"  [#ffd700]{verb}[/] from {server[0]} {fmt(net.addr_of(server))}: "
                              f"network {ifc.net} → host {ifc.host}, gateway {ifc.gw}")
             self.refresh_sidebar()
             c.refresh()
@@ -159,7 +159,7 @@ class AddressCommands(CommandHost):
         if not fl.generations:
             done(None)
         else:
-            self.animate_flood(fl, "gold1", discovered)  # type: ignore[attr-defined]
+            self.animate_flood(fl, "#ffd700", discovered)  # type: ignore[attr-defined]
 
     @command("ip")
     def cmd_ip(self, args: list[str], opts: dict[str, str]) -> None:

@@ -223,7 +223,7 @@ class TrafficCommands(CommandHost):
             raise NetError(f"unicast {src} → {args[1]}: {e}") from None
         if len(path) < 2:
             raise NetError(f"{src} is a gateway: nothing to send through")
-        self._log_route("UNICAST", "orange1", src, label, path, legs, internet)
+        self._log_route("UNICAST", "#ffaf00", src, label, path, legs, internet)
         self._learn(legs)
         c = self.canvas
         links = [li for _, li in path[1:]]
@@ -232,12 +232,12 @@ class TrafficCommands(CommandHost):
 
         def delivered() -> None:
             c.cool(links)
-            c.flash_device(path[-1][0], "orange1")
-            self.log_msg(f"  [orange1]delivered to {label}[/]: {len(path) - 1} hops, "
+            c.flash_device(path[-1][0], "#ffaf00")
+            self.log_msg(f"  [#ffaf00]delivered to {label}[/]: {len(path) - 1} hops, "
                          f"{routers} router{'s' if routers != 1 else ''}")
             self.refresh_sidebar()
 
-        c.send_packet(self._cells(path), "orange1", delivered)
+        c.send_packet(self._cells(path), "#ffaf00", delivered)
 
     def _targets(self, toks: list[str]) -> list[str]:
         """Expand device ids, addresses and group names into a list of device ids."""
@@ -314,7 +314,7 @@ class TrafficCommands(CommandHost):
             c.send_packet(self._cells(p), "bright_magenta", lambda d=dst: arrived(d))
 
     # ---- random background traffic --------------------------------------------
-    TRAFFIC_COLORS = {"unicast": "sky_blue1", "internet": "plum2", "broadcast": "khaki1"}
+    TRAFFIC_COLORS = {"unicast": "#87d7ff", "internet": "#d7afff", "broadcast": "#ffff87"}
     traffic: TrafficGenerator | None = None
 
     @command("traffic")

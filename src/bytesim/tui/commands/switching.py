@@ -26,21 +26,21 @@ class SwitchingCommands(CommandHost):
         if not fl.generations:
             raise NetError(f"{name} can't send: its cable is down or blocked")
         if fl.storm:
-            self.log_msg(f"[b gold1]BROADCAST[/] {name} [dim]{mac}[/] → everyone")
+            self.log_msg(f"[b #ffd700]BROADCAST[/] {name} [dim]{mac}[/] → everyone")
             self.set_off_storm(fl, f"a broadcast from {name}")
             return
         net.learn_flood(fl)
         hops, reached = len(fl.generations), sorted(fl.delivered)
-        self.log_msg(f"[b gold1]BROADCAST[/] {name} [dim]{mac}[/] → everyone: reached "
+        self.log_msg(f"[b #ffd700]BROADCAST[/] {name} [dim]{mac}[/] → everyone: reached "
                      f"{len(reached)} interface{'s' if len(reached) != 1 else ''} in {hops} hop"
                      f"{'s' if hops != 1 else ''}, then the frames died out (no loop)")
 
         def done() -> None:
             for dev, _ in reached:
-                self.canvas.flash_device(dev, "gold1")
+                self.canvas.flash_device(dev, "#ffd700")
             self.refresh_sidebar()
 
-        self.animate_flood(fl, "gold1", done)
+        self.animate_flood(fl, "#ffd700", done)
 
     @command("stp")
     def cmd_stp(self, args: list[str], opts: dict[str, str]) -> None:
@@ -80,7 +80,7 @@ class SwitchingCommands(CommandHost):
                 self.log_msg("[dim]nothing to aggregate: no switch has two or more parallel data cables "
                              "to another switch, router or gateway[/]")
             for a, b, n in spans:
-                self.log_msg(f"  [steel_blue1]{a}–{b}[/]: {n} parallel cables  [dim](lag {a} {b})[/]")
+                self.log_msg(f"  [#5fd7ff]{a}–{b}[/]: {n} parallel cables  [dim](lag {a} {b})[/]")
             if spans:
                 self.log_msg(f"[dim]{len(spans)} aggregatable span{'s' if len(spans) != 1 else ''}: "
                              f"lag auto bundles {'them all' if len(spans) > 1 else 'it'}[/]")
@@ -130,7 +130,7 @@ class SwitchingCommands(CommandHost):
         net.lags = {p for p in (frozenset(net.end(x) if x in net.devices else x for x in q) for q in net.lags)
                     if len(p) == 2}
         peers = sum(1 for l in net.links if net.is_peer_link(l))
-        self.log_msg(f"[medium_purple1]⇋ MLAG domain {g}[/]: {' '.join(net.devices_in(g))} act as one switch, "
+        self.log_msg(f"[#af87ff]⇋ MLAG domain {g}[/]: {' '.join(net.devices_in(g))} act as one switch, "
                      f"{peers} peer link{'s' if peers != 1 else ''}")
         spans = [(a, b, n) for a, b, n in net.aggregatable() if g in (a, b)]
         for a, b, n in spans:
@@ -157,7 +157,7 @@ class SwitchingCommands(CommandHost):
         for g in sorted(net.mlag_domains):
             peers = [l for l in net.links if net.is_peer_link(l) and net.end(l.a) == g]
             bundles = sorted((next(iter(p - {g})) for p in net.lags if g in p), key=net._end_order)
-            self.log_msg(f"[medium_purple1]⇋ {g}[/]: {' '.join(net.devices_in(g))} · {len(peers)} peer link"
+            self.log_msg(f"[#af87ff]⇋ {g}[/]: {' '.join(net.devices_in(g))} · {len(peers)} peer link"
                          f"{'s' if len(peers) != 1 else ''} · bundles to {' '.join(bundles) or '—'}")
 
     def _bundle(self, a: str, b: str) -> None:
@@ -173,7 +173,7 @@ class SwitchingCommands(CommandHost):
         router = next((d for d in (a, b) if d in net.devices and net.is_router(d)), None)
         extra = (f"; {router} treats them as one interface with one address" if router
                  else "; STP won't block them")
-        self.log_msg(f"[steel_blue1]≡ lag {a}–{b}[/]: {n} cables act as one link "
+        self.log_msg(f"[#5fd7ff]≡ lag {a}–{b}[/]: {n} cables act as one link "
                      f"[dim](flows are spread across them{extra})[/]")
 
     def lag_hint(self, a: str, b: str) -> None:
@@ -205,7 +205,7 @@ class SwitchingCommands(CommandHost):
             members = [l for l in net.links if net.bundle(l) == pair]
             up = sum(1 for l in members if net.usable(l))
             ports = " ".join(f"{l.a}:p{l.pa}–{l.b}:p{l.pb}" for l in members)
-            self.log_msg(f"[steel_blue1]≡ {a}–{b}[/]: {up}/{len(members)} members carrying traffic [dim]({ports})[/]")
+            self.log_msg(f"[#5fd7ff]≡ {a}–{b}[/]: {up}/{len(members)} members carrying traffic [dim]({ports})[/]")
 
     # ---- storms -----------------------------------------------------------
     def set_off_storm(self, fl: Flood, cause: str) -> None:
@@ -226,7 +226,7 @@ class SwitchingCommands(CommandHost):
                      f"(layer-2 frames have no TTL)[/]")
         mac = net.devices[fl.source[0]].mac(fl.source[1])
         for sw, ports in sorted(fl.flaps.items(), key=lambda kv: net.bridge_id(kv[0])):
-            self.log_msg(f"  [orange1]MAC {mac} flapping on {sw}: "
+            self.log_msg(f"  [#ffaf00]MAC {mac} flapping on {sw}: "
                          f"{'⇄'.join(f'p{p}' for p in sorted(ports))}[/]")
         self.log_msg(f"  [red]{switches} saturated: nothing else gets through until the loop is broken "
                      f"([b]stp on[/b], or fail/unlink a cable in it)[/]")

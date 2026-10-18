@@ -5,11 +5,12 @@ import heapq
 
 from ..constants import VIP_HOST
 from .base import NetworkBase
-from .layer2 import flow_pick
+from .layer2 import flow_pick, structure_memo
 from .types import Leg, NetError, fmt
 
 
 class RoutingMixin(NetworkBase):
+    @structure_memo
     def route(self, src: str, dst: tuple[str, int] | None) -> list[Leg]:
         """Path from a device to an interface (or to the internet if dst is None).
 

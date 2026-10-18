@@ -49,7 +49,7 @@ def render_inspector(net: Network, sel: str | None, selected_group: str | None,
         if gsel in net.mlag_domains:
             peers = sum(1 for l in net.links if net.is_peer_link(l) and net.end(l.a) == gsel)
             ends = sorted((next(iter(p - {gsel})) for p in net.lags if gsel in p), key=net._end_order)
-            out.append(f"[medium_purple1]MLAG domain[/] · {peers} peer link{'s' if peers != 1 else ''}"
+            out.append(f"[#af87ff]MLAG domain[/] · {peers} peer link{'s' if peers != 1 else ''}"
                        f" · bundles to {' '.join(ends) or '—'}")
         if gsel in net.clusters and not graph:
             st = net.ha_state(gsel)
@@ -78,7 +78,7 @@ def render_inspector(net: Network, sel: str | None, selected_group: str | None,
         if traffic is not None and any(c[d.id] for c in (traffic.stats.talkers, traffic.stats.received,
                                                           traffic.stats.forwarded, traffic.stats.drops_at)):
             st = traffic.stats
-            out.append(f"[sky_blue1]traffic[/] sent {st.talkers[d.id]} · received {st.received[d.id]}"
+            out.append(f"[#87d7ff]traffic[/] sent {st.talkers[d.id]} · received {st.received[d.id]}"
                        f" · forwarded {st.forwarded[d.id]} · dropped {st.drops_at[d.id]}")
         out.append(f"[dim]position {d.x},{d.y}[/]"
                    + (f"  [{group_color(g)}]{' › '.join(chain)}[/]" if g else ""))
@@ -93,9 +93,9 @@ def render_inspector(net: Network, sel: str | None, selected_group: str | None,
                 od = net.devices[o]
                 tag = f" [{ROLE_COLOR[l.role]}]{l.role}[/]" if l.role != "data" else ""
                 if net.bundle(l):
-                    tag += " [steel_blue1]≡ lag[/]"
+                    tag += " [#5fd7ff]≡ lag[/]"
                 elif net.is_peer_link(l):
-                    tag += " [medium_purple1]⇋ peer[/]"
+                    tag += " [#af87ff]⇋ peer[/]"
                 mark = "[b red]✕[/]" if not l.up else "[b]●[/]"
                 if d.kind == "s" and (role := net.port_role(d.id, p)):
                     tag += {"blocking": " [b yellow]⊘ blocking[/]", "root": " [cyan]root[/]",
@@ -104,12 +104,12 @@ def render_inspector(net: Network, sel: str | None, selected_group: str | None,
                     mark = "[b yellow]⊘[/]"
                 out.append(f" {mark} {d.port_name(p):<5} → [{od.color}]{o}[/]:{od.port_name(op)}{tag}")
             else:
-                out.append(f" [grey42]○ {d.port_name(p):<5}   free[/]")
+                out.append(f" [#6c6c6c]○ {d.port_name(p):<5}   free[/]")
             ifc = net.ifaces.get(f"{d.id}:{p}")
             line = f"   [dim]{d.mac(p):<6}[/]"
             if d.kind != "s" and ifc and not graph and (ifc.addr or ifc.mode in ("static", "none")):
                 mode = mode_text(ifc)
-                color = {"dhcp": "gold1", "static": "cyan", "auto": "grey62", "none": "red"}.get(mode, "yellow")
+                color = {"dhcp": "#ffd700", "static": "cyan", "auto": "#9e9e9e", "none": "red"}.get(mode, "yellow")
                 line += f" {fmt(ifc.addr)} [{color}]{mode}[/]"
                 if ifc.gw is not None:
                     line += f" [dim]gw {ifc.gw}[/]"
@@ -122,7 +122,7 @@ def render_inspector(net: Network, sel: str | None, selected_group: str | None,
             if d.id in net.storming:
                 out.append("[b red]⚡ STORMING: every port saturated[/]")
             for mac, ports in sorted(net.mac_flaps.get(d.id, {}).items()):
-                out.append(f"[orange1]MAC {mac} flapping {'⇄'.join(f'p{q}' for q in sorted(ports))}[/]")
+                out.append(f"[#ffaf00]MAC {mac} flapping {'⇄'.join(f'p{q}' for q in sorted(ports))}[/]")
             table = net.mac_tables.get(d.id, {})
             out.append("")
             out.append(f"[b]MAC table[/] [dim]({len(table)} learned)[/]")

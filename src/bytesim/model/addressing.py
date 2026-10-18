@@ -3,8 +3,8 @@ from __future__ import annotations
 
 from ..constants import HOST_MAX, POOL, VIP_HOST
 from .base import NetworkBase
+from .layer2 import structure_memo
 from .types import Iface, NetError, fmt
-
 
 class AddressingMixin(NetworkBase):
     def iface(self, dev_id: str, port: int) -> Iface:
@@ -144,6 +144,7 @@ class AddressingMixin(NetworkBase):
         ifc.host = self._free_host(net, ifc)
         ifc.net, ifc.gw, ifc.via = net, None, "adhoc"
 
+    @structure_memo
     def reconcile(self, skip: frozenset[tuple[str, int]] = frozenset()) -> list[str]:
         """Bring every address in line with the current cabling. Returns what changed.
 

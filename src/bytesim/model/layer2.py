@@ -1,8 +1,10 @@
 """Layer 2: which cables carry data, broadcast domains, frame paths, MAC learning."""
 from __future__ import annotations
 
+import functools
 import zlib
 from collections import deque
+from contextlib import contextmanager
 
 from .base import NetworkBase
 from .types import Link
@@ -14,11 +16,70 @@ def flow_pick(options: list, flow: str, salt: object = "") -> object:
     return options[zlib.crc32(f"{flow}|{salt}".encode()) % len(options)]
 
 
+def structure_memo(fn):
+    """Remember the network's structure (MLAG domains, bundles and their cables) for one
+    call. Routing, flooding and STP ask about it for every cable they look at, and it
+    can't change while they run. Liveness (usable()) is never remembered."""
+    @functools.wraps(fn)
+    def wrapper(self, *args, **kwargs):
+        with self.remembering():
+            return fn(self, *args, **kwargs)
+    return wrapper
+
+
 class Layer2Mixin(NetworkBase):
+    _memo: dict | None = None
+
+    @contextmanager
+    def remembering(self):
+        """A scope in which the structure is remembered (nothing may change it meanwhile)."""
+        if self._memo is not None:
+            yield
+            return
+        self._memo = {}
+        try:
+            yield
+        finally:
+            self._memo = None
+
+    def _structure(self) -> tuple[dict[str, str], dict[int, frozenset | None], dict[frozenset, list[int]]]:
+        """(switch -> its MLAG domain, cable index -> its bundle, bundle -> its cable indices)."""
+        domain_of = {d: g for g in sorted(self.mlag_domains)
+                     for d in self.devices_in(g)}  # type: ignore[attr-defined]
+        bundle_of: dict[int, frozenset | None] = {}
+        cables: dict[frozenset, list[int]] = {}
+        for i, l in enumerate(self.links):
+            pair = self._bundle_of(l, domain_of)
+            bundle_of[i] = pair
+            if pair is not None:
+                cables.setdefault(pair, []).append(i)
+        return domain_of, bundle_of, cables
+
+    def _cached_structure(self):
+        if self._memo is None:
+            return None
+        if "structure" not in self._memo:
+            self._memo["structure"] = (self._structure(), {id(l): i for i, l in enumerate(self.links)})
+        return self._memo["structure"]
+
+    def _bundle_of(self, l: Link, domain_of: dict[str, str]) -> frozenset[str] | None:
+        if l.control:
+            return None
+        ea, eb = domain_of.get(l.a, l.a), domain_of.get(l.b, l.b)
+        if ea == eb:
+            return None                                   # a peer link, not a bundle member
+        pair = frozenset((ea, eb))
+        return pair if pair in self.lags else None
+
     def end(self, dev_id: str) -> str:
         """What a cable's end counts as for aggregation: the MLAG domain a switch is
         in (the domain acts as one logical switch), else the device itself."""
-        if self.mlag_domains and self.devices[dev_id].kind == "s":
+        if not self.mlag_domains:
+            return dev_id
+        cached = self._cached_structure()
+        if cached is not None:
+            return cached[0][0].get(dev_id, dev_id)
+        if self.devices[dev_id].kind == "s":
             for d in self.mlag_domains:
                 if dev_id in self.devices_in(d):  # type: ignore[attr-defined]
                     return d
@@ -30,17 +91,25 @@ class Layer2Mixin(NetworkBase):
 
     def bundle(self, l: Link) -> frozenset[str] | None:
         """The link aggregation a cable belongs to (its pair of ends), if any."""
-        if l.control:
+        if not self.lags:
             return None
-        ea, eb = self.end(l.a), self.end(l.b)
-        if ea == eb:
-            return None                                   # a peer link, not a bundle member
-        pair = frozenset((ea, eb))
-        return pair if pair in self.lags else None
+        cached = self._cached_structure()
+        if cached is not None:
+            (_, bundle_of, _), index = cached
+            i = index.get(id(l))
+            if i is not None:
+                return bundle_of[i]
+        return self._bundle_of(l, {d: self.end(d) for d in (l.a, l.b)})
+
+    def _bundle_cables(self, pair: frozenset[str]) -> list[int]:
+        cached = self._cached_structure()
+        if cached is not None:
+            return cached[0][2].get(pair, [])
+        return [i for i, l in enumerate(self.links) if self.bundle(l) == pair]
 
     def members(self, pair: frozenset[str]) -> list[int]:
         """Indices of a bundle's cables that can carry data now."""
-        return [i for i, l in enumerate(self.links) if self.bundle(l) == pair and self.usable(l)]
+        return [i for i in self._bundle_cables(pair) if self.usable(self.links[i])]
 
     def _end_kind(self, end: str) -> str:
         return "s" if end in self.mlag_domains else self.devices[end].kind
@@ -67,6 +136,7 @@ class Layer2Mixin(NetworkBase):
             return f"{a} and {b} have {n} data cable{'s' if n != 1 else ''} between them: it takes at least two"
         return None
 
+    @structure_memo
     def aggregatable(self, include_bundled: bool = False) -> list[tuple[str, str, int]]:
         """Parallel spans that could be bundled (but aren't, unless include_bundled)."""
         counts: dict[frozenset, int] = {}
@@ -122,7 +192,8 @@ class Layer2Mixin(NetworkBase):
         pair = self.bundle(self.links[li]) if li is not None else None
         if pair is None:
             return [port]
-        return sorted(l.port_of(dev_id) for l in self.links if self.bundle(l) == pair)
+        return sorted(self.links[i].port_of(dev_id) for i in self._bundle_cables(pair)
+                      if self.links[i].touches(dev_id))
 
     def lag_primary(self, dev_id: str, port: int) -> int:
         """The port that speaks for a bundle on this device (its lowest member port)."""
@@ -151,6 +222,7 @@ class Layer2Mixin(NetworkBase):
                 and (l.a, l.pa) not in self.stp_blocked and (l.b, l.pb) not in self.stp_blocked
                 and l.a not in self.storming and l.b not in self.storming)
 
+    @structure_memo
     def segment(self, dev_id: str, port: int) -> list[tuple[str, int]]:
         """Other interfaces in the same broadcast domain (reached through switches only)."""
         li = self._logical_link(dev_id, port)
@@ -176,6 +248,7 @@ class Layer2Mixin(NetworkBase):
                         out.append((w, self.lag_primary(w, wp)))   # a bundle shows up as one interface
         return out
 
+    @structure_memo
     def l2path(self, src: tuple[str, int], dst: tuple[str, int],
                flow: str | None = None) -> list[tuple[str, int]] | None:
         """Frame path from one interface to another, switching only through switches.

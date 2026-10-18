@@ -7,7 +7,7 @@ KINDS = {
     "g": ("gateway", 4, "magenta"),
     "r": ("router", 4, "cyan"),
     "s": ("switch", 8, "green"),
-    "c": ("computer", 1, "dodger_blue1"),
+    "c": ("computer", 1, "#0087ff"),
 }
 
 RANK = {"g": 0, "r": 1, "s": 2, "c": 3}

@@ -268,3 +268,13 @@ def test_a_cluster_keeps_its_virtual_gateway_when_a_bundled_switch_fails():
         assert net.vip_owners(lan), f"nobody owns the virtual gateway with {victim} down"
         assert net.route("c1", ("c2", 1)) and any(net.route("c1", (r, p)) for r, p in [("r1", 1), ("r2", 1)])
         net.devices[victim].up = True
+
+
+def test_remembered_structure_never_outlives_a_call():
+    net = mlag_net()
+    with net.remembering():
+        assert net.end("s1") == "fab"
+    net.mlag_domains.discard("fab")                       # changed between calls: seen at once
+    net.lags = {p for p in net.lags if "fab" not in p}
+    assert net.end("s1") == "s1" and all(net.bundle(l) is None for l in net.links)
+    assert net._memo is None
