@@ -70,6 +70,51 @@ class SwitchingCommands(CommandHost):
         self.log_msg(f"STP {words[-1]} for {' '.join(switches) if len(args) > 1 else 'every switch'}")
         self.changed()
 
+    @command("lag")
+    def cmd_lag(self, args: list[str], opts: dict[str, str]) -> None:
+        """lag <switch> <switch>: bundle their parallel cables into one logical link."""
+        net = self.net
+        if len(args) != 2:
+            raise NetError("usage: lag <switch> <switch>   (bundles every data cable between them)")
+        a, b = (self._switch(t) for t in args)
+        if a == b:
+            raise NetError("a link aggregation joins two different switches")
+        cables = [l for l in net.links if {l.a, l.b} == {a, b} and l.role == "data"]
+        if len(cables) < 2:
+            raise NetError(f"{a} and {b} have {len(cables)} data cable{'s' if len(cables) != 1 else ''} "
+                           f"between them: a link aggregation needs at least two")
+        pair = frozenset((a, b))
+        if pair in net.lags:
+            raise NetError(f"{a}–{b} is already a link aggregation")
+        net.lags.add(pair)
+        self.log_msg(f"[steel_blue1]≡ lag {a}–{b}[/]: {len(cables)} cables act as one link "
+                     f"[dim](STP won't block them; flows are spread across them)[/]")
+        self.changed()
+
+    @command("unlag")
+    def cmd_unlag(self, args: list[str], opts: dict[str, str]) -> None:
+        net = self.net
+        if len(args) != 2:
+            raise NetError("usage: unlag <switch> <switch>")
+        pair = frozenset(self.net.get(self._ref(t)[0]).id for t in args)
+        if pair not in net.lags:
+            raise NetError(f"{' and '.join(sorted(pair))} aren't a link aggregation")
+        net.lags.discard(pair)
+        self.log_msg(f"{'–'.join(sorted(pair))}: separate cables again (STP may block all but one)")
+        self.changed()
+
+    @command("lags")
+    def cmd_lags(self, args: list[str], opts: dict[str, str]) -> None:
+        net = self.net
+        if not net.lags:
+            self.log_msg("[dim]no link aggregations: lag <switch> <switch> bundles parallel cables[/]")
+        for pair in sorted(net.lags, key=lambda p: sorted(p)):
+            a, b = sorted(pair, key=lambda d: (d[0], int(d[1:])))
+            members = [l for l in net.links if net.bundle(l) == pair]
+            up = sum(1 for l in members if net.usable(l))
+            ports = " ".join(f"{a}:p{l.port_of(a)}" for l in members)
+            self.log_msg(f"[steel_blue1]≡ {a}–{b}[/]: {up}/{len(members)} members carrying traffic [dim]({ports})[/]")
+
     # ---- storms -----------------------------------------------------------
     def set_off_storm(self, fl: Flood, cause: str) -> None:
         """A broadcast hit a live loop: mark the storm, explain it, and draw it."""

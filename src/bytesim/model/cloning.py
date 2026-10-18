@@ -153,6 +153,11 @@ class CloningMixin(NetworkBase):
             siblings = self.groups[parent]
             siblings.insert(siblings.index(name) + 1, top)
 
+        # Link aggregations inside the group come along.
+        for pair in list(self.lags):
+            if pair <= inside:
+                self.lags.add(frozenset(dev_map[d] for d in pair))
+
         # Per-device settings travel with the copy; addresses don't.
         for old, new in dev_map.items():
             if old in self.stp_off:

@@ -54,6 +54,7 @@ def canonical(net: Network) -> dict[str, Any]:
         "stp_off": frozenset(net.stp_off),
         "stp_priority": dict(net.stp_priority),
         "dhcp_off": frozenset(net.dhcp_off),
+        "lags": frozenset(net.lags),
         "ifaces": ifaces,
         "devices_down": frozenset(d.id for d in net.devices.values() if not d.up),
         "cables_down": Counter(link_key(l.a, l.pa, l.b, l.pb, l.role) for l in net.links if not l.up),

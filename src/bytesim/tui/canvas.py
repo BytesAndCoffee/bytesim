@@ -13,7 +13,7 @@ from textual.widget import Widget
 from ..constants import BOX_H
 from ..model import Device, Network, fmt
 from .cables import LINE, LINE2, LINE_DASH, LINE_HEAVY, N, S, dirbit, route
-from .theme import HA_COLOR, HEAT, ROLE_COLOR, group_color
+from .theme import HA_COLOR, HEAT, LAG_COLOR, ROLE_COLOR, group_color
 
 @dataclass
 class Packet:
@@ -326,7 +326,7 @@ class NetCanvas(Widget, can_focus=True):
             st = ("red" if not alive or storm else "grey35" if blocked
                   else "bold yellow" if i in hot
                   else HEAT[0] if heat > 0.66 else HEAT[1] if heat > 0.33 else HEAT[2] if heat > 0.1
-                  else ROLE_COLOR[l.role])
+                  else LAG_COLOR if net.bundle(l) else ROLE_COLOR[l.role])
             kind = "control" if l.control else "blocked" if blocked else l.role
             for pt in pts:
                 kinds.setdefault(pt, set()).add(kind)

@@ -87,6 +87,8 @@ def render_inspector(net: Network, sel: str | None, selected_group: str | None,
                 o, op = l.other(d.id)
                 od = net.devices[o]
                 tag = f" [{ROLE_COLOR[l.role]}]{l.role}[/]" if l.role != "data" else ""
+                if net.bundle(l):
+                    tag += " [steel_blue1]≡ lag[/]"
                 mark = "[b red]✕[/]" if not l.up else "[b]●[/]"
                 if d.kind == "s" and (role := net.port_role(d.id, p)):
                     tag += {"blocking": " [b yellow]⊘ blocking[/]", "root": " [cyan]root[/]",

@@ -42,6 +42,7 @@ class Network(GroupsMixin, Layer2Mixin, AddressingMixin, RoutingMixin, HAMixin, 
         for key in [k for k in self.ifaces if k.split(":")[0] == dev.id]:
             del self.ifaces[key]
         self.dhcp_off.discard(dev.id)
+        self.lags = {p for p in self.lags if dev.id not in p}
         self.stp_off.discard(dev.id)
         self.stp_priority.pop(dev.id, None)
         self.storming.discard(dev.id)
@@ -109,6 +110,7 @@ class Network(GroupsMixin, Layer2Mixin, AddressingMixin, RoutingMixin, HAMixin, 
             "dhcp_off": sorted(self.dhcp_off),
             "clusters": self.clusters,
             "cluster_modes": self.cluster_modes,
+            "lags": sorted(sorted(p, key=lambda d: (d[0], int(d[1:]))) for p in self.lags),
             "stp_off": sorted(self.stp_off, key=lambda d: (d[0], int(d[1:]))),
             "stp_priority": self.stp_priority,
         }, indent=2)
@@ -135,6 +137,7 @@ class Network(GroupsMixin, Layer2Mixin, AddressingMixin, RoutingMixin, HAMixin, 
         net.dhcp_off = set(data.get("dhcp_off", [])) & set(net.devices)
         net.clusters = {c: p for c, p in data.get("clusters", {}).items() if c in net.groups}
         net.cluster_modes = {c: m for c, m in data.get("cluster_modes", {}).items() if c in net.clusters}
+        net.lags = {frozenset(p) for p in data.get("lags", []) if len(set(p)) == 2 and set(p) <= set(net.devices)}
         net.stp_off = set(data.get("stp_off", [])) & set(net.devices)
         net.stp_priority = {d: int(v) for d, v in data.get("stp_priority", {}).items() if d in net.devices}
         return net

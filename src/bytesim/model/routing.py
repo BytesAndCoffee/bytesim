@@ -5,6 +5,7 @@ import heapq
 
 from ..constants import VIP_HOST
 from .base import NetworkBase
+from .layer2 import flow_pick
 from .types import Leg, NetError, fmt
 
 
@@ -15,6 +16,10 @@ class RoutingMixin(NetworkBase):
         Each leg is one layer-2 hop between addressed interfaces. A host delivers
         directly on its own network, otherwise via its gateway; routers know every
         network of every router they share a network with (a toy IGP).
+
+        Where several paths are equally short, the flow (source and destination)
+        picks one: the same flow always takes the same path, different flows spread
+        out (ECMP). Hops over a link aggregation pick their member the same way.
         """
         dev = self.devices[src]
         if dev.kind == "s":
@@ -24,15 +29,16 @@ class RoutingMixin(NetworkBase):
         if dst and dst[0] == src:
             return []
         dst_addr = self.addr_of(dst) if dst else None
+        flow = f"{src}>{dst[0] if dst else 'internet'}"
         if dev.kind in "rg":
-            return self._router_route(src, dst, dst_addr)
+            return self._router_route(src, dst, dst_addr, flow)
         nics = self.addressed(src)
         if not nics:
             raise NetError(f"{src} has no address (try: dhcp {src})")
         if dst:
             for p, ifc in nics:
                 if ifc.net == dst_addr[0] and dst in self.segment(src, p):
-                    return [((src, p), dst, self.l2path((src, p), dst))]
+                    return [((src, p), dst, self.l2path((src, p), dst, flow))]
         problems = []
         for p, ifc in nics:
             if ifc.gw is None:
@@ -55,7 +61,8 @@ class RoutingMixin(NetworkBase):
                 problems.append(f"gateway {fmt((ifc.net, ifc.gw))} unreachable from {src}:{dev.port_name(p)}")
                 continue
             try:
-                return [((src, p), gw, self.l2path((src, p), gw))] + self._router_route(gw[0], dst, dst_addr)
+                return ([((src, p), gw, self.l2path((src, p), gw, flow))]
+                        + self._router_route(gw[0], dst, dst_addr, flow))
             except NetError as e:
                 problems.append(str(e))
         if problems:
@@ -64,57 +71,70 @@ class RoutingMixin(NetworkBase):
         raise NetError(f"{where} isn't local to {src} and {src} has no gateway")
 
     def _router_route(self, start: str, dst: tuple[str, int] | None,
-                      dst_addr: tuple[int, int] | None) -> list[Leg]:
+                      dst_addr: tuple[int, int] | None, flow: str = "") -> list[Leg]:
         """Cheapest path in cable hops from a router to dst (or to any gateway).
 
         Routers are nodes; two routers are adjacent when they share a network.
-        Counting cables rather than routers lets a direct fabric link win over
-        a detour back through a switched network."""
+        Counting cables rather than routers lets a direct fabric link win over a
+        detour back through a switched network. Every equally cheap way into a
+        router is kept, and the flow chooses among them (ECMP)."""
         standby = self.standby_routers()  # type: ignore[attr-defined]
-        best: dict[str, int] = {start: 0}
-        prev: dict[str, tuple[str, Leg] | None] = {start: None}
-        heap: list[tuple[int, int, str, Leg | None]] = [(0, 0, start, None)]
-        tick = 0
-        done: set[str] = set()
-
-        def legs_to(u: str) -> list[Leg]:
-            out = []
-            while prev[u] is not None:
-                parent, leg = prev[u]
-                out.append(leg)
-                u = parent
-            return out[::-1]
+        dist: dict[str, int] = {start: 0}
+        ways_in: dict[str, list[tuple[str, Leg]]] = {start: []}
+        heap: list[tuple[int, str]] = [(0, start)]
+        done: list[str] = []
 
         while heap:
-            cost, _, u, final = heapq.heappop(heap)
-            if final is not None:                       # popped the destination itself
-                return legs_to(u) + [final]
-            if u in done:
+            cost, u = heapq.heappop(heap)
+            if u in done or cost > dist[u]:
                 continue
-            done.add(u)
-            if dst is None and self.devices[u].kind == "g":
-                return legs_to(u)
-            if dst is not None and dst[0] == u:
-                return legs_to(u)
+            done.append(u)
             for p, ifc in self.addressed(u):
-                seg = self.segment(u, p)
-                if dst is not None and dst in seg and ifc.net == dst_addr[0]:
-                    path = self.l2path((u, p), dst)
-                    tick += 1
-                    heapq.heappush(heap, (cost + len(path) - 1, tick, u, ((u, p), dst, path)))
-                for e in seg:
+                for e in self.segment(u, p):
                     a = self.addr_of(e)
                     if not (self.is_router(e[0]) and a and a[0] == ifc.net) or e[0] in done:
                         continue
                     if e[0] in standby and not (dst is not None and dst[0] == e[0]):
                         continue                   # an active-passive standby doesn't forward
-                    path = self.l2path((u, p), e)
+                    path = self.l2path((u, p), e, flow)
+                    if path is None:
+                        continue
                     c = cost + len(path) - 1
-                    if c < best.get(e[0], 10**9):
-                        best[e[0]] = c
-                        prev[e[0]] = (u, ((u, p), e, path))
-                        tick += 1
-                        heapq.heappush(heap, (c, tick, e[0], None))
-        if dst is None:
-            raise NetError(f"no route from {start} to a gateway (internet)")
-        raise NetError(f"no route to network {dst_addr[0]} from {start}")
+                    if c < dist.get(e[0], 10**9):
+                        dist[e[0]] = c
+                        ways_in[e[0]] = [(u, ((u, p), e, path))]
+                        heapq.heappush(heap, (c, e[0]))
+                    elif c == dist[e[0]]:
+                        ways_in[e[0]].append((u, ((u, p), e, path)))
+
+        # Where the packet can leave the router graph, and how much that costs.
+        ends: list[tuple[int, str, Leg | None]] = []
+        for u in done:
+            if dst is None:
+                if self.devices[u].kind == "g":
+                    ends.append((dist[u], u, None))
+                continue
+            if dst[0] == u:
+                ends.append((dist[u], u, None))
+            for p, ifc in self.addressed(u):
+                if ifc.net == dst_addr[0] and dst in self.segment(u, p):
+                    path = self.l2path((u, p), dst, flow)
+                    if path is not None:
+                        ends.append((dist[u] + len(path) - 1, u, ((u, p), dst, path)))
+        if not ends:
+            if dst is None:
+                raise NetError(f"no route from {start} to a gateway (internet)")
+            raise NetError(f"no route to network {dst_addr[0]} from {start}")
+
+        def order(leg: Leg | None) -> tuple:
+            return (leg[0], leg[1]) if leg else ()
+
+        cheapest = min(c for c, _, _ in ends)
+        ties = sorted((x for x in ends if x[0] == cheapest), key=lambda x: (x[1], order(x[2])))
+        _, u, final = flow_pick(ties, flow, "exit")
+        legs: list[Leg] = [final] if final else []
+        while u != start:                              # walk back, choosing among equal ways in
+            parent, leg = flow_pick(sorted(ways_in[u], key=lambda w: (w[0], order(w[1]))), flow, u)
+            legs.append(leg)
+            u = parent
+        return legs[::-1]

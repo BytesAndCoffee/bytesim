@@ -264,6 +264,12 @@ for static. Press `v` to hide or show them.
 - Routers forward between networks, choosing the path with the fewest cable
   hops. Two routers are neighbours when they share a network.
 - Only gateways reach `internet`.
+- **Equal-cost paths (ECMP):** when several paths are equally short, the
+  router picks one by hashing the flow, meaning its source and destination.
+  One conversation always takes the same path (so its packets stay in order),
+  while different conversations spread across all the equal paths. In an
+  active-active cluster, both routers share the load. The choice is stable
+  from run to run, so seeded traffic stays reproducible.
 - When something can't be reached, ByteSim says why: no address, no gateway,
   no route, or a gateway that isn't reachable.
 
@@ -366,6 +372,23 @@ through: pings, DHCP and broadcasts fail with
 **A storm ends when its loop is broken:** turn STP on (`stp on`, or for one
 switch), fail or unplug a cable in the loop, or delete a switch. ByteSim then
 logs `broadcast storm over`.
+
+**Link aggregation:** to use parallel cables between two switches instead
+of letting STP block all but one, bundle them:
+
+```text
+lag s8 s12          every data cable between s8 and s12 now acts as one link
+lags                list bundles and how many members are carrying traffic
+unlag s8 s12        separate cables again
+```
+
+STP treats the bundle as one link and blocks none of its members. Loop
+detection doesn't count it as a loop, and a broadcast crosses on one member
+instead of circling. Unicast flows are spread across the members by the same
+flow hash as ECMP. If a member fails, the others carry on. Bundled cables are
+drawn in steel blue, and the inspector marks their ports `≡ lag`. Only
+switch↔switch pairs can be bundled: between routers, parallel cables are
+already separate routed links, and ECMP spreads flows across them.
 
 **Failover:** failing a forwarding cable makes STP unblock a backup port
 (`STP s7:p2 blocking → forwarding`), and traffic reroutes through it.
@@ -599,6 +622,7 @@ them, and a group name on its own selects the group.
 | `mode graph\|addr` | | graph or address mode |
 | `traffic on [rate] [seed=] [hosts=] [mix=]`, `traffic [off\|rate n\|reset]` | | random background traffic and statistics |
 | `broadcast <id[:port]>` | `bcast`, `flood` | flood one frame (storms in a live loop) |
+| `lag <switch> <switch>`, `unlag …`, `lags` | | bundle parallel cables into one logical link |
 | `stp [on\|off]`, `stp <switch…> on\|off`, `stp priority <switch> <n>` | | spanning tree |
 | `renumber [auto] bfs\|dfs [root]`, `renumber off` | `rename` | renumber ids in traversal order |
 | `auto` | `arrange`, `layout` | re-arrange and keep arranging |

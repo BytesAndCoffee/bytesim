@@ -39,4 +39,8 @@ First release.
   routed core.
 - Router autoconfiguration keeps every network id on one segment: stale ids left by
   re-cabling are renumbered instead of being shared by separate links.
+- ECMP: equal-cost routes are chosen per flow (stable hash of source and destination), so
+  flows spread while each stays on one path.
+- Link aggregation (`lag a b`, `unlag`, `lags`): parallel switch cables act as one link: not
+  blocked by STP, not a loop, flows hashed across members, survives member failures.
 - JSON save and load; a `bytesim` command with `--demo` and `--run`.

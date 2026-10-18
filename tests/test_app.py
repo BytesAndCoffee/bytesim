@@ -252,3 +252,12 @@ def test_cluster_mode_command():
     text = " ".join(" ".join(log).split())
     assert "r2 standby" in text and "every active member forwards" in text and "mode must be" in text
     assert app.net.cluster_modes == {}
+
+
+def test_lag_commands():
+    app, log = asyncio.run(_session(["add s 6 2", "s1 s2", "s1 s2", "lag s1 s2", "lags", "lag s1 s2",
+                                     "unlag s1 s2", "lag s1 s9"]))
+    text = " ".join(" ".join(log).split())
+    assert "2 cables act as one link" in text and "2/2 members carrying traffic" in text
+    assert "already a link aggregation" in text and "separate cables again" in text
+    assert app.net.lags == set()

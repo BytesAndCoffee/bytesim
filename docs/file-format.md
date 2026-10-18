@@ -22,6 +22,7 @@ template-based YAML format, see [topology-format.md](topology-format.md).
     "c1:1": { "mode": "dhcp", "net": 1, "host": 10, "gw": 254, "via": "dhcp" }
   },
   "dhcp_off": ["r2"],
+  "lags": [["s8", "s12"]],
   "stp_off": ["s4", "s5"],
   "stp_priority": { "s7": 4096 }
 }
@@ -37,6 +38,7 @@ template-based YAML format, see [topology-format.md](topology-format.md).
 | `cluster_modes` | clusters where only the active member forwards → `active-passive` (absent: active-active) |
 | `ifaces` | `"device:port"` → address config. `mode`: `dhcp`, `adhoc`, `static`, `auto` (routers) or `none`. `net`/`host`: the address. `gw`: the gateway's host number on the same network (254 = cluster virtual gateway). `via`: how the current address was obtained |
 | `dhcp_off` | routers and gateways whose DHCP server is switched off |
+| `lags` | switch pairs whose data cables are bundled into one link aggregation |
 | `stp_off` | switches with spanning tree switched off (every other switch runs it) |
 | `stp_priority` | switch → bridge priority (default 32768; lower wins the root election) |
 

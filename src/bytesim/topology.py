@@ -371,6 +371,16 @@ class _Builder:
         for iname, tmpl, inst, roles in built:
             self._links(tmpl.get("links"), roles, f"instances.{iname}.links")
         self._links(spec.get("links"), {}, "links")
+        for n, pair in enumerate(spec.get("lags") or []):
+            where = f"lags[{n}]"
+            if not (isinstance(pair, list) and len(pair) == 2):
+                raise NetError(f"{where}: a pair of switches, e.g. [s8, s12]")
+            a, b = (self._resolve(x, {}, where)[0][0] for x in pair)
+            if a == b or net.devices[a].kind != "s" or net.devices[b].kind != "s":
+                raise NetError(f"{where}: link aggregations join two different switches")
+            if sum(1 for l in net.links if {l.a, l.b} == {a, b} and l.role == "data") < 2:
+                raise NetError(f"{where}: {a} and {b} need at least two data cables between them")
+            net.lags.add(frozenset((a, b)))
         return net
 
 
@@ -451,6 +461,11 @@ def dump_topology(net: Network, pin_ports: bool = False) -> str:
 
     out += ["", "links:"]
     out += _dump_links(net, pin_ports)
+    if net.lags:
+        out += ["", "lags:"]
+        for pair in sorted(net.lags, key=lambda p: sorted(p, key=_order)):
+            a, b = sorted(pair, key=_order)
+            out.append(f"  - [{a}, {b}]")
     return "\n".join(out) + "\n"
 
 

@@ -49,6 +49,8 @@ forwarding, failure) and leaves out the detail that gets in the way:
 - **Unicast, ping and multicast.** With multicast you can see the packet copied
   wherever the paths split.
 - **Cable roles** (data, control, fabric) and failures you can trigger by hand.
+- **Multipath**: flow-hashed ECMP across equal-cost routes, and link
+  aggregation (`lag`) for parallel cables.
 - **Switching loops**: spanning tree with root bridges and blocked ports, and
   real broadcast storms (frames multiplying, MAC tables flapping) when STP is off.
 - **HA router clusters** with a shared virtual gateway, failover, split-brain,

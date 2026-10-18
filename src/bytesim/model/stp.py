@@ -35,6 +35,10 @@ class Flood:
         return [sum(g.values()) for g in self.generations]
 
 
+def adj_links(adj: dict[str, list[tuple[str, int]]]) -> set[int]:
+    return {i for edges in adj.values() for _, i in edges}
+
+
 class SpanningTreeMixin(NetworkBase):
     # ---- configuration -------------------------------------------------
     def stp_enabled(self, switch: str) -> bool:
@@ -82,9 +86,17 @@ class SpanningTreeMixin(NetworkBase):
     def loop_links(self, honor_stp: bool = True) -> set[int]:
         """Trunks that lie on a loop (any cable that isn't a bridge in the graph theory sense)."""
         trunks = self._trunks(honor_stp)
+        rep: dict[frozenset, int] = {}             # a link aggregation counts as one link
+        for i in trunks:
+            pair = self.bundle(self.links[i])  # type: ignore[attr-defined]
+            if pair is not None:
+                rep.setdefault(pair, i)
         adj: dict[str, list[tuple[str, int]]] = {}
         for i in trunks:
             l = self.links[i]
+            pair = self.bundle(l)  # type: ignore[attr-defined]
+            if pair is not None and rep[pair] != i:
+                continue
             adj.setdefault(l.a, []).append((l.b, i))
             adj.setdefault(l.b, []).append((l.a, i))
         disc: dict[str, int] = {}
@@ -109,7 +121,13 @@ class SpanningTreeMixin(NetworkBase):
         for s in adj:
             if s not in disc:
                 dfs(s, -1)
-        return set(trunks) - bridges
+        loops = adj_links(adj) - bridges
+
+        def stands_for(i: int) -> int:               # a bundle's members share its fate
+            pair = self.bundle(self.links[i])  # type: ignore[attr-defined]
+            return rep[pair] if pair is not None else i
+
+        return {i for i in trunks if stands_for(i) in loops}
 
     # ---- spanning tree ---------------------------------------------------
     def stp_compute(self) -> tuple[set[tuple[str, int]], dict[str, str], dict[str, int]]:
@@ -151,9 +169,14 @@ class SpanningTreeMixin(NetworkBase):
                                    key=lambda e: (cost[e[0]], self.bridge_id(e[0])))
                 return (cost[far[0]], cost[near[0]], self.bridge_id(near[0]), near[1])
 
-            forced = [i for i in here if not (self.stp_enabled(self.links[i].a)
+            # A link aggregation is one logical link: decided once, applied to every member.
+            groups: dict[object, list[int]] = {}
+            for i in here:
+                groups.setdefault(self.bundle(self.links[i]) or i, []).append(i)  # type: ignore[attr-defined]
+            reps = {g[0]: g for g in groups.values()}
+            forced = [i for i in reps if not (self.stp_enabled(self.links[i].a)
                                               or self.stp_enabled(self.links[i].b))]
-            for i in forced + sorted((i for i in here if i not in forced), key=rank):
+            for i in forced + sorted((i for i in reps if i not in forced), key=rank):
                 l = self.links[i]
                 ra, rb = find(l.a), find(l.b)
                 if ra != rb:
@@ -163,7 +186,9 @@ class SpanningTreeMixin(NetworkBase):
                     continue                         # an unbreakable loop: no STP end
                 ends = sorted([(l.a, l.pa), (l.b, l.pb)],
                               key=lambda e: (cost[e[0]], self.bridge_id(e[0])), reverse=True)
-                blocked.add(next(e for e in ends if self.stp_enabled(e[0])))
+                side = next(e for e in ends if self.stp_enabled(e[0]))[0]
+                for j in reps[i]:
+                    blocked.add((side, self.links[j].port_of(side)))
             # Root port: the forwarding cable that leads one hop closer to the root.
             fwd = [i for i in here if (self.links[i].a, self.links[i].pa) not in blocked
                    and (self.links[i].b, self.links[i].pb) not in blocked]
@@ -262,8 +287,15 @@ class SpanningTreeMixin(NetworkBase):
                     out.delivered[(dev, port)] += n
                     continue
                 out.flaps.setdefault(dev, set()).add(port)
+                came_by = self.bundle(self.links[li])  # type: ignore[attr-defined]
+                bundles_used: set[frozenset] = set()
                 for lj, l in enumerate(self.links):
                     if lj != li and l.touches(dev) and ok(l):
+                        pair = self.bundle(l)  # type: ignore[attr-defined]
+                        if pair is not None:       # one member per bundle, never back the way it came
+                            if pair == came_by or pair in bundles_used:
+                                continue
+                            bundles_used.add(pair)
                         nxt[(lj, l.other(dev)[0])] += n
             if not nxt:
                 break

@@ -169,6 +169,9 @@ def _clone_equivalent(net: Network, a: str, b: str, phi: dict[str, str]) -> bool
     if not same_tree(a, b):
         return False
     inside_a, inside_b = set(phi), set(phi.values())
+    lags_a = {frozenset(phi[d] for d in p) for p in net.lags if p <= inside_a}
+    if lags_a != {p for p in net.lags if p <= inside_b}:
+        return False
     from .model.equivalence import link_key
     want = Counter(link_key(phi[l.a], l.pa, phi[l.b], l.pb, l.role)
                    for l in net.links if l.a in inside_a and l.b in inside_a)
@@ -328,6 +331,15 @@ def render(net: Network, subs: list[Substitution], mode: str = "readable") -> tu
     done_groups: set[str] = set(produced_groups)
     done_links: set[int] = set(made)
     configured: set[str] = set(produced)                    # clones copy settings
+    bundled: set[frozenset] = {p for p in net.lags if any(p <= set(net.devices_in(c.dst)) for c in clones)}
+
+    def lag_cmds(devs: set[str]) -> list[str]:
+        out = []
+        for pair in sorted(net.lags, key=lambda q: sorted(q, key=_order)):
+            if pair <= devs and pair not in bundled:
+                bundled.add(pair)
+                out.append(f"lag {' '.join(sorted(pair, key=_order))}")
+        return out
 
     # ---- devices, in id order (gaps recreated with placeholders) ----------
     def create(k: str, upto: int) -> None:
@@ -469,6 +481,7 @@ def render(net: Network, subs: list[Substitution], mode: str = "readable") -> tu
         lines.extend(cmds)
         ends = {d for _, f in c.pairs for d in net.devices_in(f)} | {d for e, _ in c.pairs for d in net.devices_in(e)}
         lines.extend(cables_for(set(src), ends if c.kind == "copy" else None))
+        lines.extend(lag_cmds(set(src)))           # before the clone, so the clone copies them
         if len(lines) == mark:
             drop_empty_heading()
         blank()
@@ -518,6 +531,11 @@ def render(net: Network, subs: list[Substitution], mode: str = "readable") -> tu
         blank()
         say(s.describe())
         lines.append(s.command())
+    remaining_lags = lag_cmds(set(net.devices))
+    if remaining_lags:
+        blank()
+        say("Link aggregations: parallel cables that act as one link")
+        lines.extend(remaining_lags)
     if other or off:
         blank()
         say("Switch and router settings")
