@@ -193,10 +193,12 @@ Each item is one macro, optionally with `role:`:
 instance order, then the stand-alone `links:`. Each cable takes the first
 free port at each end unless pinned. Pinned ports must be free.
 
-### Link aggregations
+### Link aggregations and MLAG
 ```yaml
+mlag: [fab1]         # fab1's switches act as one (they need peer links between them)
 lags:
   - [s8, s12]        # every data cable between s8 and s12 acts as one link
+  - [g1, fab1]       # g1's cables to any of fab1's switches act as one link
 ```
 Each entry names a switch and another switch, router or gateway with at least
 two data cables between them. It's read after `links:`, so the cables exist by

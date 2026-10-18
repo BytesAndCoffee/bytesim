@@ -13,7 +13,7 @@ from textual.widget import Widget
 from ..constants import BOX_H
 from ..model import Device, Network, fmt
 from .cables import LINE, LINE2, LINE_DASH, LINE_HEAVY, N, S, dirbit, route
-from .theme import HA_COLOR, HEAT, LAG_COLOR, ROLE_COLOR, group_color
+from .theme import HA_COLOR, HEAT, LAG_COLOR, PEER_COLOR, ROLE_COLOR, group_color
 
 @dataclass
 class Packet:
@@ -326,7 +326,8 @@ class NetCanvas(Widget, can_focus=True):
             st = ("red" if not alive or storm else "grey35" if blocked
                   else "bold yellow" if i in hot
                   else HEAT[0] if heat > 0.66 else HEAT[1] if heat > 0.33 else HEAT[2] if heat > 0.1
-                  else LAG_COLOR if net.bundle(l) else ROLE_COLOR[l.role])
+                  else LAG_COLOR if net.bundle(l) else PEER_COLOR if net.is_peer_link(l)
+                  else ROLE_COLOR[l.role])
             kind = "control" if l.control else "blocked" if blocked else l.role
             for pt in pts:
                 kinds.setdefault(pt, set()).add(kind)
@@ -347,6 +348,8 @@ class NetCanvas(Widget, can_focus=True):
             sel = g == self.selected_group
             label = f" {g} "
             st = group_color(g)
+            if g in net.mlag_domains:
+                label = f" {g} · MLAG "
             if g in net.clusters and not self.app.graph:  # type: ignore[attr-defined]
                 ha = net.ha_state(g)
                 label = f" {g} · HA {ha['level']} " if ha["level"] != "ok" else f" {g} · HA "

@@ -46,4 +46,7 @@ First release.
 - Link aggregation also works between a switch and a router or gateway, which then treats the
   members as one interface with one address. `lag` finds aggregatable spans, `lag auto` bundles
   them, and cabling a second parallel cable suggests it.
+- MLAG (`mlag <group>`, like vPC): a group of peer-linked switches acts as one logical switch,
+  so a device's cables to several of them can be bundled (`lag g1 fab1`, found by `lag`).
+  Local forwarding preference and vPC loop avoidance included.
 - JSON save and load; a `bytesim` command with `--demo` and `--run`.

@@ -96,10 +96,67 @@ class SwitchingCommands(CommandHost):
             self.changed()
             return
         if len(args) != 2:
-            raise NetError("usage: lag  ·  lag auto  ·  lag <switch> <switch|router|gateway>")
-        a, b = (net.get(self._ref(t)[0]).id for t in args)
+            raise NetError("usage: lag  ·  lag auto  ·  lag <switch|domain> <switch|router|gateway|domain>")
+        a, b = (self._end_token(t) for t in args)
         self._bundle(a, b)
         self.changed()
+
+    def _end_token(self, tok: str) -> str:
+        """A bundle end: an MLAG domain's name, or a device id."""
+        if tok.lower() in self.net.mlag_domains:
+            return tok.lower()
+        return self.net.get(self._ref(tok)[0]).id
+
+    @command("mlag")
+    def cmd_mlag(self, args: list[str], opts: dict[str, str]) -> None:
+        """mlag <group>: its switches act as one logical switch (multi-chassis aggregation)."""
+        net = self.net
+        if not args:
+            self.dispatch(["mlags"])
+            return
+        if len(args) != 1:
+            raise NetError("usage: mlag <group of switches>   (they need peer links between them)")
+        g = args[0].lower()
+        problem = net.mlag_problem(g)
+        if problem:
+            raise NetError(problem)
+        if g in net.mlag_domains:
+            raise NetError(f"{g} is already an MLAG domain")
+        net.mlag_domains.add(g)
+        # Bundles that ended on one of its switches now end on the domain.
+        net.lags = {p for p in (frozenset(net.end(x) if x in net.devices else x for x in q) for q in net.lags)
+                    if len(p) == 2}
+        peers = sum(1 for l in net.links if net.is_peer_link(l))
+        self.log_msg(f"[medium_purple1]⇋ MLAG domain {g}[/]: {' '.join(net.devices_in(g))} act as one switch, "
+                     f"{peers} peer link{'s' if peers != 1 else ''}")
+        spans = [(a, b, n) for a, b, n in net.aggregatable() if g in (a, b)]
+        for a, b, n in spans:
+            other = b if a == g else a
+            self.log_msg(f"  [dim]{other}–{g}: {n} cables can now be one link: [b]lag {other} {g}[/b][/]")
+        self.changed()
+
+    @command("unmlag")
+    def cmd_unmlag(self, args: list[str], opts: dict[str, str]) -> None:
+        net = self.net
+        if len(args) != 1 or args[0].lower() not in net.mlag_domains:
+            raise NetError("usage: unmlag <domain>")
+        g = args[0].lower()
+        dropped = [p for p in net.lags if g in p]
+        net.mlag_domains.discard(g)
+        net.lags -= set(dropped)
+        self.log_msg(f"{g}: separate switches again" + (f"; {len(dropped)} bundle(s) to it removed" if dropped else ""))
+        self.changed()
+
+    @command("mlags")
+    def cmd_mlags(self, args: list[str], opts: dict[str, str]) -> None:
+        net = self.net
+        if not net.mlag_domains:
+            self.log_msg("[dim]no MLAG domains: mlag <group> makes a group of switches act as one[/]")
+        for g in sorted(net.mlag_domains):
+            peers = [l for l in net.links if net.is_peer_link(l) and net.end(l.a) == g]
+            bundles = sorted((next(iter(p - {g})) for p in net.lags if g in p), key=net._end_order)
+            self.log_msg(f"[medium_purple1]⇋ {g}[/]: {' '.join(net.devices_in(g))} · {len(peers)} peer link"
+                         f"{'s' if len(peers) != 1 else ''} · bundles to {' '.join(bundles) or '—'}")
 
     def _bundle(self, a: str, b: str) -> None:
         net = self.net
@@ -111,7 +168,7 @@ class SwitchingCommands(CommandHost):
             raise NetError(f"{a}–{b} is already a link aggregation")
         net.lags.add(pair)
         n = sum(1 for l in net.links if net.bundle(l) == pair)
-        router = next((d for d in (a, b) if net.is_router(d)), None)
+        router = next((d for d in (a, b) if d in net.devices and net.is_router(d)), None)
         extra = (f"; {router} treats them as one interface with one address" if router
                  else "; STP won't block them")
         self.log_msg(f"[steel_blue1]≡ lag {a}–{b}[/]: {n} cables act as one link "
@@ -119,9 +176,9 @@ class SwitchingCommands(CommandHost):
 
     def lag_hint(self, a: str, b: str) -> None:
         """After cabling: point out a span that just became aggregatable."""
-        pair = frozenset((a, b))
+        pair = frozenset((self.net.end(a), self.net.end(b)))
         if pair not in self.net.lags and any(set((x, y)) == set(pair) for x, y, _ in self.net.aggregatable()):
-            x, y = sorted(pair, key=lambda d: (d[0] != "s", d[0], int(d[1:])))
+            x, y = sorted(pair, key=self.net._end_order)
             self.log_msg(f"  [dim]{x}–{y} now has parallel cables: [b]lag {x} {y}[/b] to aggregate them[/]")
 
     @command("unlag")
@@ -129,11 +186,11 @@ class SwitchingCommands(CommandHost):
         net = self.net
         if len(args) != 2:
             raise NetError("usage: unlag <switch> <switch>")
-        pair = frozenset(self.net.get(self._ref(t)[0]).id for t in args)
+        pair = frozenset(self._end_token(t) for t in args)
         if pair not in net.lags:
             raise NetError(f"{' and '.join(sorted(pair))} aren't a link aggregation")
         net.lags.discard(pair)
-        self.log_msg(f"{'–'.join(sorted(pair))}: separate cables again (STP may block all but one)")
+        self.log_msg(f"{'–'.join(sorted(pair, key=net._end_order))}: separate cables again (STP may block all but one)")
         self.changed()
 
     @command("lags")
@@ -141,11 +198,11 @@ class SwitchingCommands(CommandHost):
         net = self.net
         if not net.lags:
             self.log_msg("[dim]no link aggregations: lag <switch> <switch> bundles parallel cables[/]")
-        for pair in sorted(net.lags, key=lambda p: sorted(p)):
-            a, b = sorted(pair, key=lambda d: (d[0], int(d[1:])))
+        for pair in sorted(net.lags, key=lambda p: sorted(p, key=net._end_order)):
+            a, b = sorted(pair, key=net._end_order)
             members = [l for l in net.links if net.bundle(l) == pair]
             up = sum(1 for l in members if net.usable(l))
-            ports = " ".join(f"{a}:p{l.port_of(a)}" for l in members)
+            ports = " ".join(f"{l.a}:p{l.pa}–{l.b}:p{l.pb}" for l in members)
             self.log_msg(f"[steel_blue1]≡ {a}–{b}[/]: {up}/{len(members)} members carrying traffic [dim]({ports})[/]")
 
     # ---- storms -----------------------------------------------------------

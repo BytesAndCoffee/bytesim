@@ -102,7 +102,7 @@ class NamingMixin(NetworkBase):
         self.groups = {g: [ren(m) if m in mapping else m for m in ms] for g, ms in self.groups.items()}
         self.ifaces = {f"{ren(k.split(':')[0])}:{k.split(':')[1]}": v for k, v in self.ifaces.items()}
         self.dhcp_off = {ren(d) for d in self.dhcp_off}
-        self.lags = {frozenset(ren(d) for d in p) for p in self.lags}
+        self.lags = {frozenset(ren(d) for d in p) for p in self.lags}   # domain names map to themselves
         self.stp_off = {ren(d) for d in self.stp_off}
         self.stp_priority = {ren(d): v for d, v in self.stp_priority.items()}
         self.stp_blocked = {(ren(d), p) for d, p in self.stp_blocked}

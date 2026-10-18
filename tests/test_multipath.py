@@ -148,7 +148,7 @@ def gateway_span(lag=True):
 def test_aggregatable_spans_are_detected():
     net = replay("add g 4 1\nadd r 4 2\nadd s 6 2\nadd c 2 1\n"
                  "g1 s1\ng1 s1\ns1 s2\ns1 s2\nr1 s2\nr1 s2\nr1 r2\nr1 r2\nc1 s2\nc1 s2\ns1 r2")
-    assert net.aggregatable() == [("s1", "g1", 2), ("s1", "s2", 2), ("s2", "r1", 2)]   # not r1–r2, not c1
+    assert net.aggregatable() == [("s1", "s2", 2), ("s1", "g1", 2), ("s2", "r1", 2)]   # not r1–r2, not c1
     net.lags.add(frozenset({"s1", "g1"}))
     assert ("s1", "g1", 2) not in net.aggregatable()
 
@@ -183,3 +183,73 @@ def test_switch_gateway_lags_round_trip(mode):
     assert Network.from_json(net.to_json()).lags == net.lags
     assert load_topology(dump_topology(net, pin_ports=True)).lags == net.lags
     assert differences(net, replay(synthesize(net, mode).script)) == []
+
+
+# ---- MLAG: a group of switches that acts as one ----------------------------------------------------
+def mlag_net(domain=True, bundle=True, stp=True, peer=True):
+    """fab = s1+s2 (peer link s1–s2). g1 and the access switch s3 are cabled to both. c1, c2 on s3."""
+    cmds = ["add g 4 1", "add s 6 3", "add c 1 2", "group fab s1 s2",
+            "g1 s1", "g1 s2", "s3 s1", "s3 s2", "c1 s3", "c2 s3"]
+    cmds += ["s1 s2"] if peer else []
+    cmds += ["mlag fab"] if domain else []
+    cmds += ["lag auto"] if domain and bundle else []
+    cmds += [] if stp else ["stp s1 s2 s3 off"]
+    net = replay("\n".join(cmds))
+    net.reconcile()
+    return net
+
+
+def test_an_mlag_domain_needs_peer_links():
+    with pytest.raises(NetError, match="peer links"):
+        mlag_net(peer=False)
+    with pytest.raises(NetError, match="switches only"):
+        replay("add s 4 2\nadd c 1 1\ngroup x s1 c1\nmlag x")
+
+
+def test_cables_to_different_switches_of_a_domain_are_aggregatable():
+    assert mlag_net(domain=False).aggregatable() == []              # different switches: nothing yet
+    net = mlag_net(bundle=False)
+    assert net.aggregatable() == [("fab", "s3", 2), ("fab", "g1", 2)]
+    assert mlag_net().lags == {frozenset({"fab", "g1"}), frozenset({"fab", "s3"})}
+
+
+def test_an_mlag_bundle_is_one_link_for_stp_and_loops():
+    assert mlag_net(bundle=False).stp_blocked                       # s3–s1–s2 is a loop until bundled
+    net = mlag_net()
+    assert net.stp_blocked == set() and net.loop_links(honor_stp=False) == set()
+
+
+def test_vpc_rule_no_duplicates_and_no_storm_even_without_stp():
+    fl = mlag_net(stp=False).flood(("c1", 1))
+    assert not fl.storm
+    assert sum(n for (d, _), n in fl.delivered.items() if d == "g1") == 1
+    assert sum(n for (d, _), n in fl.delivered.items() if d == "c2") == 1
+
+
+def test_a_dual_homed_gateway_is_one_interface_and_survives_a_switch():
+    net = mlag_net()
+    assert [p for p, _ in net.addressed("g1")] == [1]
+    assert net.route("c1", None)                                    # internet via g1
+    for victim in ("s1", "s2"):
+        n = mlag_net()
+        n.devices[victim].up = False
+        n.reconcile()
+        path = [d for _, _, f in n.route("c1", None) for d, _ in f]
+        assert victim not in path and "g1" in path
+
+
+@pytest.mark.parametrize("mode", MODES)
+def test_mlag_round_trips(mode):
+    net = mlag_net()
+    back = Network.from_json(net.to_json())
+    assert back.mlag_domains == {"fab"} and back.lags == net.lags
+    yaml_back = load_topology(dump_topology(net, pin_ports=True))
+    assert yaml_back.mlag_domains == {"fab"} and yaml_back.lags == net.lags
+    assert differences(net, replay(synthesize(net, mode).script)) == []
+
+
+def test_unmlag_and_ungroup_clean_up():
+    net = replay("add g 4 1\nadd s 6 2\ngroup fab s1 s2\ng1 s1\ng1 s2\ns1 s2\nmlag fab\nlag g1 fab\nunmlag fab")
+    assert net.mlag_domains == set() and net.lags == set()
+    net = replay("add g 4 1\nadd s 6 2\ngroup fab s1 s2\ng1 s1\ng1 s2\ns1 s2\nmlag fab\nlag g1 fab\nungroup fab")
+    assert net.mlag_domains == set() and net.lags == set()

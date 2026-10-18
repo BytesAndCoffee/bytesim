@@ -18,7 +18,8 @@ class NetworkBase:
         self.mac_tables: dict[str, dict[str, int]] = {}   # switch -> {mac: port}
         self.clusters: dict[str, str] = {}        # HA cluster (a group of routers) -> split policy
         self.cluster_modes: dict[str, str] = {}   # cluster -> "active-passive" (absent: active-active)
-        self.lags: set[frozenset[str]] = set()    # switch pairs whose parallel cables are one bundle
+        self.lags: set[frozenset[str]] = set()    # bundles: pairs of ends (a device, or an MLAG domain)
+        self.mlag_domains: set[str] = set()       # groups of switches that act as one logical switch
         self.notes: list[str] = []                # remarks from the last route() for the console
         self.stp_off: set[str] = set()            # switches with spanning tree switched off
         self.stp_priority: dict[str, int] = {}    # bridge priority (default 32768; lower = root)

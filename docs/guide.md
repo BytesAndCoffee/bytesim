@@ -404,6 +404,31 @@ Router↔router pairs can't be bundled: their parallel cables are separate
 routed links, and ECMP already spreads flows over them. Computers can't be
 bundled either.
 
+**Multi-chassis aggregation (MLAG, like vPC):** a normal bundle needs all its
+cables on the *same* pair of devices. To bundle a gateway's cables to several
+switches, those switches must first act as one logical switch:
+
+```text
+s1 s2                  peer links: the domain's switches must be cabled together
+s2 s3
+mlag fab1              s1 s2 s3 (group fab1) now act as one switch
+lag                    finds spans like  g1–fab1: 3 cables
+lag auto               bundles them: lag g1 fab1, lag r2 fab1, …
+mlags  ·  unmlag fab1
+```
+
+Once a domain is declared:
+- **Detection and bundling:** a device with cables to two or more of the
+  domain's switches can be bundled to the domain as a whole.
+- **What the bundle gives you:** everything a normal bundle does. One interface
+  and one address on a router or gateway, no STP blocking, flows spread across
+  members. The interface stays up while any switch or member is.
+- **Real vPC forwarding rules:** traffic leaves on the switch it's already on
+  when that switch has a member. A frame that crossed a peer link is never sent
+  out a bundle, so a broadcast can't loop back to the device that sent it.
+- **Display:** peer links are drawn in purple and marked `⇋ peer` in the
+  inspector. The domain's frame says `MLAG`.
+
 **Failover:** failing a forwarding cable makes STP unblock a backup port
 (`STP s7:p2 blocking → forwarding`), and traffic reroutes through it.
 
@@ -636,7 +661,8 @@ them, and a group name on its own selects the group.
 | `mode graph\|addr` | | graph or address mode |
 | `traffic on [rate] [seed=] [hosts=] [mix=]`, `traffic [off\|rate n\|reset]` | | random background traffic and statistics |
 | `broadcast <id[:port]>` | `bcast`, `flood` | flood one frame (storms in a live loop) |
-| `lag`, `lag auto`, `lag <switch> <switch\|router\|gateway>`, `unlag …`, `lags` | | find and bundle aggregatable spans |
+| `lag`, `lag auto`, `lag <switch\|domain> <switch\|router\|gateway\|domain>`, `unlag …`, `lags` | | find and bundle aggregatable spans |
+| `mlag <group>`, `unmlag <group>`, `mlags` | | make a group of switches act as one (needs peer links) |
 | `stp [on\|off]`, `stp <switch…> on\|off`, `stp priority <switch> <n>` | | spanning tree |
 | `renumber [auto] bfs\|dfs [root]`, `renumber off` | `rename` | renumber ids in traversal order |
 | `auto` | `arrange`, `layout` | re-arrange and keep arranging |

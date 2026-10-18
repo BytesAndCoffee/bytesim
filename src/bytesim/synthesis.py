@@ -169,6 +169,9 @@ def _clone_equivalent(net: Network, a: str, b: str, phi: dict[str, str]) -> bool
     if not same_tree(a, b):
         return False
     inside_a, inside_b = set(phi), set(phi.values())
+    if net.mlag_domains and any(net.end(d) != d or any(d in p for p in net.lags if p & net.mlag_domains)
+                                for d in inside_a | inside_b):
+        return False                       # MLAG domains and their bundles are written out explicitly
     lags_a = {frozenset(phi[d] for d in p) for p in net.lags if p <= inside_a}
     if lags_a != {p for p in net.lags if p <= inside_b}:
         return False
@@ -333,12 +336,15 @@ def render(net: Network, subs: list[Substitution], mode: str = "readable") -> tu
     configured: set[str] = set(produced)                    # clones copy settings
     bundled: set[frozenset] = {p for p in net.lags if any(p <= set(net.devices_in(c.dst)) for c in clones)}
 
+    def span(pair: frozenset) -> set[str]:
+        return {d for e in pair for d in (net.devices_in(e) if e in net.mlag_domains else [e])}
+
     def lag_cmds(devs: set[str]) -> list[str]:
         out = []
-        for pair in sorted(net.lags, key=lambda q: sorted(q, key=_order)):
-            if pair <= devs and pair not in bundled:
+        for pair in sorted(net.lags, key=lambda q: sorted(q, key=net._end_order)):
+            if span(pair) <= devs and pair not in bundled:
                 bundled.add(pair)
-                out.append(f"lag {' '.join(sorted(pair, key=_order))}")
+                out.append(f"lag {' '.join(sorted(pair, key=net._end_order))}")
         return out
 
     # ---- devices, in id order (gaps recreated with placeholders) ----------
@@ -531,6 +537,10 @@ def render(net: Network, subs: list[Substitution], mode: str = "readable") -> tu
         blank()
         say(s.describe())
         lines.append(s.command())
+    if net.mlag_domains:
+        blank()
+        say("MLAG domains: groups of switches that act as one logical switch")
+        lines.extend(f"mlag {g}" for g in sorted(net.mlag_domains))
     remaining_lags = lag_cmds(set(net.devices))
     if remaining_lags:
         blank()

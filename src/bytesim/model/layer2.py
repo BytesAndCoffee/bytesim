@@ -15,25 +15,54 @@ def flow_pick(options: list, flow: str, salt: object = "") -> object:
 
 
 class Layer2Mixin(NetworkBase):
+    def end(self, dev_id: str) -> str:
+        """What a cable's end counts as for aggregation: the MLAG domain a switch is
+        in (the domain acts as one logical switch), else the device itself."""
+        if self.mlag_domains and self.devices[dev_id].kind == "s":
+            for d in self.mlag_domains:
+                if dev_id in self.devices_in(d):  # type: ignore[attr-defined]
+                    return d
+        return dev_id
+
+    def is_peer_link(self, l: Link) -> bool:
+        """A cable between two switches of the same MLAG domain."""
+        return bool(self.mlag_domains) and l.a != l.b and self.end(l.a) == self.end(l.b) != l.a
+
     def bundle(self, l: Link) -> frozenset[str] | None:
-        """The link aggregation a cable belongs to (its device pair), if any."""
-        pair = frozenset((l.a, l.b))
-        return pair if pair in self.lags and not l.control else None
+        """The link aggregation a cable belongs to (its pair of ends), if any."""
+        if l.control:
+            return None
+        ea, eb = self.end(l.a), self.end(l.b)
+        if ea == eb:
+            return None                                   # a peer link, not a bundle member
+        pair = frozenset((ea, eb))
+        return pair if pair in self.lags else None
 
     def members(self, pair: frozenset[str]) -> list[int]:
         """Indices of a bundle's cables that can carry data now."""
         return [i for i, l in enumerate(self.links) if self.bundle(l) == pair and self.usable(l)]
 
+    def _end_kind(self, end: str) -> str:
+        return "s" if end in self.mlag_domains else self.devices[end].kind
+
+    def span_cables(self, a: str, b: str) -> int:
+        """Data cables between two ends (devices or MLAG domains)."""
+        return sum(1 for l in self.links if l.role == "data"
+                   and {self.end(l.a), self.end(l.b)} == {a, b} and self.end(l.a) != self.end(l.b))
+
     def lag_problem(self, a: str, b: str) -> str | None:
-        """Why two devices can't be aggregated, or None if they can."""
-        da, db = self.devices[a], self.devices[b]
+        """Why two ends (devices or MLAG domains) can't be aggregated, or None if they can."""
         if a == b:
-            return "a link aggregation joins two different devices"
-        if "s" not in (da.kind, db.kind) or not {da.kind, db.kind} <= {"s", "r", "g"}:
-            return ("a link aggregation needs a switch at one end, and a switch, router or "
-                    "gateway at the other (between routers, parallel cables are routed links "
-                    "and ECMP already spreads flows over them)")
-        n = sum(1 for l in self.links if {l.a, l.b} == {a, b} and l.role == "data")
+            return "a link aggregation joins two different ends"
+        for x in (a, b):
+            if x not in self.mlag_domains and self.end(x) != x:
+                return f"{x} is in MLAG domain {self.end(x)}: aggregate to the domain ({self.end(x)}) instead"
+        ka, kb = self._end_kind(a), self._end_kind(b)
+        if "s" not in (ka, kb) or not {ka, kb} <= {"s", "r", "g"}:
+            return ("a link aggregation needs a switch (or MLAG domain) at one end, and a switch, "
+                    "router, gateway or domain at the other (between routers, parallel cables are "
+                    "routed links and ECMP already spreads flows over them)")
+        n = self.span_cables(a, b)
         if n < 2:
             return f"{a} and {b} have {n} data cable{'s' if n != 1 else ''} between them: it takes at least two"
         return None
@@ -42,15 +71,50 @@ class Layer2Mixin(NetworkBase):
         """Parallel spans that could be bundled but aren't: (a, b, cables), switch first."""
         counts: dict[frozenset, int] = {}
         for l in self.links:
-            if l.role == "data" and l.a != l.b:
-                pair = frozenset((l.a, l.b))
+            ea, eb = self.end(l.a), self.end(l.b)
+            if l.role == "data" and ea != eb:
+                pair = frozenset((ea, eb))
                 counts[pair] = counts.get(pair, 0) + 1
         out = []
         for pair, n in counts.items():
-            a, b = sorted(pair, key=lambda d: (d[0] != "s", d[0], int(d[1:])))
+            a, b = sorted(pair, key=self._end_order)
             if pair not in self.lags and self.lag_problem(a, b) is None:
                 out.append((a, b, n))
-        return sorted(out, key=lambda t: (t[0][0], int(t[0][1:]), t[1][0], int(t[1][1:])))
+        return sorted(out, key=lambda t: (self._end_order(t[0]), self._end_order(t[1])))
+
+    def _end_order(self, end: str) -> tuple:
+        """Domains first, then switches, then the rest by kind and number."""
+        if end in self.mlag_domains:
+            return (0, end, 0)
+        return (1 if end[0] == "s" else 2, end[0], int(end[1:]))
+
+    def mlag_problem(self, group: str) -> str | None:
+        """Why a group can't be an MLAG domain, or None if it can."""
+        if group not in self.groups:  # type: ignore[attr-defined]
+            return f"no group {group}"
+        devs = self.devices_in(group)  # type: ignore[attr-defined]
+        if any(self.devices[d].kind != "s" for d in devs):
+            return f"an MLAG domain is made of switches only, and {group} has other devices"
+        if len(devs) < 2:
+            return "an MLAG domain needs at least two switches"
+        for other in self.mlag_domains:
+            if other != group and set(devs) & set(self.devices_in(other)):  # type: ignore[attr-defined]
+                return f"{group} overlaps MLAG domain {other}"
+        reach, todo = {devs[0]}, [devs[0]]                 # peer links must join them all
+        while todo:
+            u = todo.pop()
+            for l in self.links:
+                if l.touches(u) and l.role == "data" and not l.control:
+                    v = l.other(u)[0]
+                    if v in devs and v not in reach:
+                        reach.add(v)
+                        todo.append(v)
+        if len(reach) < len(devs):
+            loose = [d for d in devs if d not in reach]
+            return (f"{group}'s switches must be joined by peer links (cables between them), "
+                    f"like vPC: {' '.join(loose)} {'is' if len(loose) == 1 else 'are'} not joined to "
+                    f"{devs[0]} — try {devs[0]} {loose[0]}")
+        return None
 
     def lag_ports(self, dev_id: str, port: int) -> list[int]:
         """All of a device's ports in the same bundle as this one (just [port] if unbundled)."""
@@ -125,7 +189,8 @@ class Layer2Mixin(NetworkBase):
             dev, li = path[k]
             pair = self.bundle(self.links[li])
             if pair:
-                options = self.members(pair)
+                here = {self.links[li].a, self.links[li].b}   # parallel members between these two
+                options = [j for j in self.members(pair) if {self.links[j].a, self.links[j].b} == here]
                 if options:
                     out[k] = (dev, flow_pick(options, key, sorted(pair)))
         return out

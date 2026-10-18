@@ -46,6 +46,11 @@ def render_inspector(net: Network, sel: str | None, selected_group: str | None,
         for sub in net.subgroups(gsel):
             out.append(f" [{group_color(sub)}]▣ {sub:<10}[/] {len(net.devices_in(sub))} devices")
         out.append(f"[dim]{inside} internal · {outside} external cables[/]")
+        if gsel in net.mlag_domains:
+            peers = sum(1 for l in net.links if net.is_peer_link(l) and net.end(l.a) == gsel)
+            ends = sorted((next(iter(p - {gsel})) for p in net.lags if gsel in p), key=net._end_order)
+            out.append(f"[medium_purple1]MLAG domain[/] · {peers} peer link{'s' if peers != 1 else ''}"
+                       f" · bundles to {' '.join(ends) or '—'}")
         if gsel in net.clusters and not graph:
             st = net.ha_state(gsel)
             out.append(f"[b]HA cluster[/] · policy {st['policy']} · {st['mode']}")
@@ -89,6 +94,8 @@ def render_inspector(net: Network, sel: str | None, selected_group: str | None,
                 tag = f" [{ROLE_COLOR[l.role]}]{l.role}[/]" if l.role != "data" else ""
                 if net.bundle(l):
                     tag += " [steel_blue1]≡ lag[/]"
+                elif net.is_peer_link(l):
+                    tag += " [medium_purple1]⇋ peer[/]"
                 mark = "[b red]✕[/]" if not l.up else "[b]●[/]"
                 if d.kind == "s" and (role := net.port_role(d.id, p)):
                     tag += {"blocking": " [b yellow]⊘ blocking[/]", "root": " [cyan]root[/]",

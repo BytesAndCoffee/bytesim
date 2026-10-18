@@ -187,8 +187,11 @@ class SpanningTreeMixin(NetworkBase):
                 ends = sorted([(l.a, l.pa), (l.b, l.pb)],
                               key=lambda e: (cost[e[0]], self.bridge_id(e[0])), reverse=True)
                 side = next(e for e in ends if self.stp_enabled(e[0]))[0]
-                for j in reps[i]:
-                    blocked.add((side, self.links[j].port_of(side)))
+                for j in reps[i]:                    # every member, at the same end of the bundle
+                    lj = self.links[j]
+                    at = side if lj.touches(side) else next(
+                        d for d in (lj.a, lj.b) if self.end(d) == self.end(side))  # type: ignore[attr-defined]
+                    blocked.add((at, lj.port_of(at)))
             # Root port: the forwarding cable that leads one hop closer to the root.
             fwd = [i for i in here if (self.links[i].a, self.links[i].pa) not in blocked
                    and (self.links[i].b, self.links[i].pb) not in blocked]
@@ -288,12 +291,14 @@ class SpanningTreeMixin(NetworkBase):
                     continue
                 out.flaps.setdefault(dev, set()).add(port)
                 came_by = self.bundle(self.links[li])  # type: ignore[attr-defined]
+                # vPC loop avoidance: what crossed a peer link never leaves on a bundle of that domain
+                over_peer = self.end(dev) if self.is_peer_link(self.links[li]) else None  # type: ignore[attr-defined]
                 bundles_used: set[frozenset] = set()
                 for lj, l in enumerate(self.links):
                     if lj != li and l.touches(dev) and ok(l):
                         pair = self.bundle(l)  # type: ignore[attr-defined]
                         if pair is not None:       # one member per bundle, never back the way it came
-                            if pair == came_by or pair in bundles_used:
+                            if pair == came_by or pair in bundles_used or over_peer in pair:
                                 continue
                             bundles_used.add(pair)
                         nxt[(lj, l.other(dev)[0])] += n

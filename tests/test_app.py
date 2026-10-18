@@ -272,3 +272,12 @@ def test_lag_detection_and_auto():
     assert "2 aggregatable spans" in text and "g1 treats them as one interface" in text
     assert app.net.lags == {frozenset({"s1", "g1"}), frozenset({"s1", "s2"})}
     assert "nothing to aggregate" in text
+
+
+def test_mlag_commands():
+    app, log = asyncio.run(_session(["add g 4 1", "add s 6 2", "group fab s1 s2", "g1 s1", "g1 s2",
+                                     "mlag fab", "s1 s2", "mlag fab", "lag", "lag g1 fab", "mlags"]))
+    text = " ".join(" ".join(log).split())
+    assert "must be joined by peer links" in text and "act as one switch, 1 peer link" in text
+    assert "g1–fab: 2 cables can now be one link" in text and "fab–g1: 2 parallel cables" in text
+    assert "bundles to g1" in text and app.net.lags == {frozenset({"fab", "g1"})}

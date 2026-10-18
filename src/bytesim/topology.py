@@ -371,11 +371,18 @@ class _Builder:
         for iname, tmpl, inst, roles in built:
             self._links(tmpl.get("links"), roles, f"instances.{iname}.links")
         self._links(spec.get("links"), {}, "links")
+        for n, g in enumerate(spec.get("mlag") or []):
+            g = str(g).lower()
+            problem = net.mlag_problem(g)
+            if problem:
+                raise NetError(f"mlag[{n}]: {problem}")
+            net.mlag_domains.add(g)
         for n, pair in enumerate(spec.get("lags") or []):
             where = f"lags[{n}]"
             if not (isinstance(pair, list) and len(pair) == 2):
-                raise NetError(f"{where}: a pair of switches, e.g. [s8, s12]")
-            a, b = (self._resolve(x, {}, where)[0][0] for x in pair)
+                raise NetError(f"{where}: a pair of ends, e.g. [s8, s12] or [g1, fab1]")
+            a, b = (str(x).lower() if str(x).lower() in net.mlag_domains
+                    else self._resolve(x, {}, where)[0][0] for x in pair)
             problem = net.lag_problem(a, b)
             if problem:
                 raise NetError(f"{where}: {problem}")
@@ -460,10 +467,12 @@ def dump_topology(net: Network, pin_ports: bool = False) -> str:
 
     out += ["", "links:"]
     out += _dump_links(net, pin_ports)
+    if net.mlag_domains:
+        out += ["", f"mlag: [{', '.join(sorted(net.mlag_domains))}]"]
     if net.lags:
         out += ["", "lags:"]
-        for pair in sorted(net.lags, key=lambda p: sorted(p, key=_order)):
-            a, b = sorted(pair, key=_order)
+        for pair in sorted(net.lags, key=lambda p: sorted(p, key=net._end_order)):
+            a, b = sorted(pair, key=net._end_order)
             out.append(f"  - [{a}, {b}]")
     return "\n".join(out) + "\n"
 

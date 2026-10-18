@@ -101,6 +101,8 @@ class GroupsMixin(NetworkBase):
                 self.groups[parent][at:at + 1] = kids
             self.clusters.pop(name, None)
             self.cluster_modes.pop(name, None)
+            self.mlag_domains.discard(name)
+            self.lags = {p for p in self.lags if name not in p}
             self._drop_from_groups([])
             return len(kids)
         ids = [m if m in self.groups else self.get(m).id for m in members]
@@ -125,6 +127,10 @@ class GroupsMixin(NetworkBase):
             gone = empty
         self.clusters = {c: pol for c, pol in self.clusters.items() if c in self.groups}
         self.cluster_modes = {c: m for c, m in self.cluster_modes.items() if c in self.clusters}
+        gone = self.mlag_domains - set(self.groups)
+        if gone:
+            self.mlag_domains -= gone
+            self.lags = {p for p in self.lags if not p & gone}
 
     def group_bounds(self, name: str) -> tuple[int, int, int, int]:
         """Frame rectangle (x0, y0, x1, y1), inclusive. Outer groups get wider margins
