@@ -61,7 +61,7 @@ class HAMixin(NetworkBase):
             # active-passive: only the leader (the one member that forwards) owns gateways
             for m in (part[:1] if self.cluster_modes.get(name) == "active-passive" else part):
                 for port, ifc in self.addressed(m):
-                    li = self.link_index(m, port)
+                    li = self._logical_link(m, port)  # type: ignore[attr-defined]  (a bundle: any live member)
                     if li is not None and self.usable(self.links[li]) and ifc.net not in claimed:
                         claimed.add(ifc.net)
                         owners.setdefault(ifc.net, []).append((m, port))

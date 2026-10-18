@@ -253,3 +253,18 @@ def test_unmlag_and_ungroup_clean_up():
     assert net.mlag_domains == set() and net.lags == set()
     net = replay("add g 4 1\nadd s 6 2\ngroup fab s1 s2\ng1 s1\ng1 s2\ns1 s2\nmlag fab\nlag g1 fab\nungroup fab")
     assert net.mlag_domains == set() and net.lags == set()
+
+
+def test_a_cluster_keeps_its_virtual_gateway_when_a_bundled_switch_fails():
+    # r1+r2 (a cluster) each bundled to fab (s1+s2); the access switch s3 too; hosts behind s3.
+    net = replay("add r 6 2\nadd s 6 3\nadd c 1 2\ngroup fab s1 s2\ncluster pair r1 r2\n"
+                 "r1:5 r2:5 role=control\nr1 s1\nr1 s2\nr2 s1\nr2 s2\ns3 s1\ns3 s2\ns1 s2\n"
+                 "c1 s3\nc2 s3\nmlag fab\nlag auto")
+    net.reconcile()
+    lan = net.iface("c1", 1).net
+    for victim in ("s1", "s2"):                       # each router's primary member is on s1
+        net.devices[victim].up = False
+        net.reconcile()
+        assert net.vip_owners(lan), f"nobody owns the virtual gateway with {victim} down"
+        assert net.route("c1", ("c2", 1)) and any(net.route("c1", (r, p)) for r, p in [("r1", 1), ("r2", 1)])
+        net.devices[victim].up = True
