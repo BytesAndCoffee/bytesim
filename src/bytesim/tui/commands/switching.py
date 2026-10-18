@@ -72,24 +72,57 @@ class SwitchingCommands(CommandHost):
 
     @command("lag")
     def cmd_lag(self, args: list[str], opts: dict[str, str]) -> None:
-        """lag <switch> <switch>: bundle their parallel cables into one logical link."""
+        """lag: list spans that can be bundled · lag auto: bundle them all · lag a b: bundle one."""
         net = self.net
+        if not args:
+            spans = net.aggregatable()
+            if not spans:
+                self.log_msg("[dim]nothing to aggregate: no switch has two or more parallel data cables "
+                             "to another switch, router or gateway[/]")
+            for a, b, n in spans:
+                self.log_msg(f"  [steel_blue1]{a}–{b}[/]: {n} parallel cables  [dim](lag {a} {b})[/]")
+            if spans:
+                self.log_msg(f"[dim]{len(spans)} aggregatable span{'s' if len(spans) != 1 else ''}: "
+                             f"lag auto bundles {'them all' if len(spans) > 1 else 'it'}[/]")
+            if net.lags:
+                self.dispatch(["lags"])
+            return
+        if args == ["auto"] or [a.lower() for a in args] == ["auto"]:
+            spans = net.aggregatable()
+            if not spans:
+                raise NetError("nothing to aggregate")
+            for a, b, _ in spans:
+                self._bundle(a, b)
+            self.changed()
+            return
         if len(args) != 2:
-            raise NetError("usage: lag <switch> <switch>   (bundles every data cable between them)")
-        a, b = (self._switch(t) for t in args)
-        if a == b:
-            raise NetError("a link aggregation joins two different switches")
-        cables = [l for l in net.links if {l.a, l.b} == {a, b} and l.role == "data"]
-        if len(cables) < 2:
-            raise NetError(f"{a} and {b} have {len(cables)} data cable{'s' if len(cables) != 1 else ''} "
-                           f"between them: a link aggregation needs at least two")
+            raise NetError("usage: lag  ·  lag auto  ·  lag <switch> <switch|router|gateway>")
+        a, b = (net.get(self._ref(t)[0]).id for t in args)
+        self._bundle(a, b)
+        self.changed()
+
+    def _bundle(self, a: str, b: str) -> None:
+        net = self.net
+        problem = net.lag_problem(a, b)
+        if problem:
+            raise NetError(problem)
         pair = frozenset((a, b))
         if pair in net.lags:
             raise NetError(f"{a}–{b} is already a link aggregation")
         net.lags.add(pair)
-        self.log_msg(f"[steel_blue1]≡ lag {a}–{b}[/]: {len(cables)} cables act as one link "
-                     f"[dim](STP won't block them; flows are spread across them)[/]")
-        self.changed()
+        n = sum(1 for l in net.links if net.bundle(l) == pair)
+        router = next((d for d in (a, b) if net.is_router(d)), None)
+        extra = (f"; {router} treats them as one interface with one address" if router
+                 else "; STP won't block them")
+        self.log_msg(f"[steel_blue1]≡ lag {a}–{b}[/]: {n} cables act as one link "
+                     f"[dim](flows are spread across them{extra})[/]")
+
+    def lag_hint(self, a: str, b: str) -> None:
+        """After cabling: point out a span that just became aggregatable."""
+        pair = frozenset((a, b))
+        if pair not in self.net.lags and any(set((x, y)) == set(pair) for x, y, _ in self.net.aggregatable()):
+            x, y = sorted(pair, key=lambda d: (d[0] != "s", d[0], int(d[1:])))
+            self.log_msg(f"  [dim]{x}–{y} now has parallel cables: [b]lag {x} {y}[/b] to aggregate them[/]")
 
     @command("unlag")
     def cmd_unlag(self, args: list[str], opts: dict[str, str]) -> None:

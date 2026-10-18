@@ -60,6 +60,8 @@ class TopologyCommands(CommandHost):
         self.log_msg(f"[green]⇄[/] [{da.color}]{l.a}[/]:{da.port_name(l.pa)} ── "
                      f"[{db.color}]{l.b}[/]:{db.port_name(l.pb)}"
                      + (f" [{ROLE_COLOR[role]}]{role}[/]" if role != "data" else ""))
+        if not self.replaying:
+            self.lag_hint(l.a, l.b)  # type: ignore[attr-defined]
         # Plugging in a computer kicks off a (visible) DHCP exchange.
         ends = [(d, p) for d, p in ((da, l.pa), (db, l.pb))
                 if d.kind == "c" and net.iface(d.id, p).mode == "dhcp" and not self.graph

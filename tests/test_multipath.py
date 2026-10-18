@@ -101,8 +101,10 @@ def test_a_broadcast_crosses_a_lag_once_instead_of_storming():
 def test_lag_rules():
     with pytest.raises(NetError, match="at least two"):
         replay("add s 4 2\ns1 s2\nlag s1 s2")
-    with pytest.raises(NetError, match="isn't a switch"):
-        replay("add r 4 1\nadd s 4 1\nr1 s1\nr1 s1\nlag r1 s1")
+    with pytest.raises(NetError, match="routed links"):
+        replay("add r 4 2\nr1 r2\nr1 r2\nlag r1 r2")             # router↔router: ECMP's job
+    with pytest.raises(NetError, match="needs a switch"):
+        replay("add s 4 1\nadd c 2 1\nc1 s1\nc1 s1\nlag c1 s1")
     net = replay("add s 4 2\ns1 s2\ns1 s2\nlag s1 s2\nunlag s1 s2")
     assert net.lags == set()
 
@@ -131,3 +133,53 @@ def test_deleting_or_renumbering_keeps_lags_consistent():
     assert net.lags == {frozenset({"s1", "s2"})}
     net.remove("s1")
     assert net.lags == set()
+
+
+
+# ---- switch ↔ gateway / router spans -------------------------------------------------------------
+def gateway_span(lag=True):
+    """A gateway with two cables to a switch, three computers behind the switch."""
+    cmds = ["add g 4 1", "add s 6 1", "add c 1 3", "g1 s1", "g1 s1", "c1 s1", "c2 s1", "c3 s1"]
+    net = replay("\n".join(cmds + (["lag s1 g1"] if lag else [])))
+    net.reconcile()
+    return net
+
+
+def test_aggregatable_spans_are_detected():
+    net = replay("add g 4 1\nadd r 4 2\nadd s 6 2\nadd c 2 1\n"
+                 "g1 s1\ng1 s1\ns1 s2\ns1 s2\nr1 s2\nr1 s2\nr1 r2\nr1 r2\nc1 s2\nc1 s2\ns1 r2")
+    assert net.aggregatable() == [("s1", "g1", 2), ("s1", "s2", 2), ("s2", "r1", 2)]   # not r1–r2, not c1
+    net.lags.add(frozenset({"s1", "g1"}))
+    assert ("s1", "g1", 2) not in net.aggregatable()
+
+
+def test_a_bundled_gateway_port_is_one_interface():
+    before, after = gateway_span(lag=False), gateway_span()
+    assert len(before.addressed("g1")) == 2                         # two ports, two addresses
+    assert [p for p, _ in after.addressed("g1")] == [1]             # one interface on the primary
+
+
+def test_traffic_to_the_gateway_spreads_and_survives_a_member_failure():
+    net = gateway_span()
+    used = {next(li for d, li in net.route(c, None)[0][2] if d == "g1") for c in ("c1", "c2", "c3")}
+    assert used == {0, 1}                                           # both member cables carry flows
+    net.links[0].up = False                                         # the primary port's own cable fails
+    net.reconcile()
+    assert [p for p, _ in net.addressed("g1")] == [1]               # the interface keeps its address
+    for c in ("c1", "c2", "c3"):
+        assert net.route(c, None)[0][2][-1][1] == 1                 # …and traffic uses the other member
+
+
+def test_a_broadcast_reaches_a_bundled_gateway_once():
+    assert gateway_span(lag=False).flood(("c1", 1)).delivered[("g1", 1)] + \
+        gateway_span(lag=False).flood(("c1", 1)).delivered[("g1", 2)] == 2
+    fl = gateway_span().flood(("c1", 1))
+    assert sum(n for (d, _), n in fl.delivered.items() if d == "g1") == 1
+
+
+@pytest.mark.parametrize("mode", MODES)
+def test_switch_gateway_lags_round_trip(mode):
+    net = gateway_span()
+    assert Network.from_json(net.to_json()).lags == net.lags
+    assert load_topology(dump_topology(net, pin_ports=True)).lags == net.lags
+    assert differences(net, replay(synthesize(net, mode).script)) == []

@@ -43,4 +43,7 @@ First release.
   flows spread while each stays on one path.
 - Link aggregation (`lag a b`, `unlag`, `lags`): parallel switch cables act as one link: not
   blocked by STP, not a loop, flows hashed across members, survives member failures.
+- Link aggregation also works between a switch and a router or gateway, which then treats the
+  members as one interface with one address. `lag` finds aggregatable spans, `lag auto` bundles
+  them, and cabling a second parallel cable suggests it.
 - JSON save and load; a `bytesim` command with `--demo` and `--run`.

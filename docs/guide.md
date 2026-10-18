@@ -373,22 +373,36 @@ through: pings, DHCP and broadcasts fail with
 switch), fail or unplug a cable in the loop, or delete a switch. ByteSim then
 logs `broadcast storm over`.
 
-**Link aggregation:** to use parallel cables between two switches instead
-of letting STP block all but one, bundle them:
+**Link aggregation:** to use parallel cables instead of letting STP block
+all but one, bundle them into a single logical link:
 
 ```text
-lag s8 s12          every data cable between s8 and s12 now acts as one link
+lag                 find aggregatable spans (two or more parallel data cables)
+lag auto            bundle every one of them
+lag s8 s12          bundle one span: switch↔switch, or switch↔router / gateway
 lags                list bundles and how many members are carrying traffic
 unlag s8 s12        separate cables again
 ```
 
-STP treats the bundle as one link and blocks none of its members. Loop
-detection doesn't count it as a loop, and a broadcast crosses on one member
-instead of circling. Unicast flows are spread across the members by the same
-flow hash as ECMP. If a member fails, the others carry on. Bundled cables are
-drawn in steel blue, and the inspector marks their ports `≡ lag`. Only
-switch↔switch pairs can be bundled: between routers, parallel cables are
-already separate routed links, and ECMP spreads flows across them.
+When you cable a second parallel cable that could be bundled, ByteSim
+suggests the `lag` command.
+
+What changes once cables are bundled:
+- **STP and loops:** the bundle counts as one link, so STP blocks none of its
+  members, loop detection doesn't count it as a loop, and a broadcast crosses
+  on one member instead of circling.
+- **Load:** unicast flows are spread across the members by the same flow hash
+  as ECMP. If a member fails, the others carry on.
+- **A router or gateway end** treats the members as **one interface with one
+  address** (on its lowest-numbered member port). Traffic to it is spread
+  across all members, and it stays reachable if any member is up, even when
+  the primary port's own cable fails.
+- **Display:** bundled cables are drawn in steel blue, and the inspector
+  marks their ports `≡ lag`.
+
+Router↔router pairs can't be bundled: their parallel cables are separate
+routed links, and ECMP already spreads flows over them. Computers can't be
+bundled either.
 
 **Failover:** failing a forwarding cable makes STP unblock a backup port
 (`STP s7:p2 blocking → forwarding`), and traffic reroutes through it.
@@ -622,7 +636,7 @@ them, and a group name on its own selects the group.
 | `mode graph\|addr` | | graph or address mode |
 | `traffic on [rate] [seed=] [hosts=] [mix=]`, `traffic [off\|rate n\|reset]` | | random background traffic and statistics |
 | `broadcast <id[:port]>` | `bcast`, `flood` | flood one frame (storms in a live loop) |
-| `lag <switch> <switch>`, `unlag …`, `lags` | | bundle parallel cables into one logical link |
+| `lag`, `lag auto`, `lag <switch> <switch\|router\|gateway>`, `unlag …`, `lags` | | find and bundle aggregatable spans |
 | `stp [on\|off]`, `stp <switch…> on\|off`, `stp priority <switch> <n>` | | spanning tree |
 | `renumber [auto] bfs\|dfs [root]`, `renumber off` | `rename` | renumber ids in traversal order |
 | `auto` | `arrange`, `layout` | re-arrange and keep arranging |

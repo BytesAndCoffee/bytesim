@@ -61,7 +61,10 @@ class AddressingMixin(NetworkBase):
                 if li is None or self.links[li].control:
                     ifc.clear()          # unplugged, or a control link: no data address
                     continue
-                if not self.usable(self.links[li]):
+                if p != self.lag_primary(dev.id, p):  # type: ignore[attr-defined]
+                    ifc.clear()          # a bundle is one interface: its primary port has the address
+                    continue
+                if not self.usable(self.links[self._logical_link(dev.id, p)]):  # type: ignore[attr-defined]
                     continue             # failed: keep the config for when it comes back
                 here = self._segment_key((dev.id, p))
                 if ifc.addr and owner.get(ifc.net, here) != here:
@@ -91,7 +94,7 @@ class AddressingMixin(NetworkBase):
                 continue
             for p in range(1, dev.nports + 1):
                 ifc = self.ifaces.get(f"{dev.id}:{p}")
-                li = self.link_index(dev.id, p)
+                li = self._logical_link(dev.id, p)  # type: ignore[attr-defined]
                 if ifc is None or not ifc.addr or li is None or not self.usable(self.links[li]):
                     continue
                 owner.setdefault(ifc.net, self._segment_key((dev.id, p)))

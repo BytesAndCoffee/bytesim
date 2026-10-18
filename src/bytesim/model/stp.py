@@ -267,7 +267,7 @@ class SpanningTreeMixin(NetworkBase):
         frames are still alive after that, they are circling: a storm.
         """
         out = Flood(source=src)
-        li0 = self.link_index(*src)
+        li0 = self._logical_link(*src)  # type: ignore[attr-defined]
         if li0 is None:
             return out
 

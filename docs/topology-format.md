@@ -198,8 +198,9 @@ free port at each end unless pinned. Pinned ports must be free.
 lags:
   - [s8, s12]        # every data cable between s8 and s12 acts as one link
 ```
-Each entry names two switches that have at least two data cables between
-them. It's read after `links:`, so the cables exist by then.
+Each entry names a switch and another switch, router or gateway with at least
+two data cables between them. It's read after `links:`, so the cables exist by
+then.
 
 ## Export
 

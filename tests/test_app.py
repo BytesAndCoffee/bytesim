@@ -261,3 +261,14 @@ def test_lag_commands():
     assert "2 cables act as one link" in text and "2/2 members carrying traffic" in text
     assert "already a link aggregation" in text and "separate cables again" in text
     assert app.net.lags == set()
+
+
+
+def test_lag_detection_and_auto():
+    app, log = asyncio.run(_session(["add g 4 1", "add s 6 2", "g1 s1", "g1 s1", "s1 s2", "s1 s2",
+                                     "lag", "lag auto", "lags", "lag"]))
+    text = " ".join(" ".join(log).split())
+    assert "s1–g1 now has parallel cables: lag s1 g1 to aggregate them" in text
+    assert "2 aggregatable spans" in text and "g1 treats them as one interface" in text
+    assert app.net.lags == {frozenset({"s1", "g1"}), frozenset({"s1", "s2"})}
+    assert "nothing to aggregate" in text

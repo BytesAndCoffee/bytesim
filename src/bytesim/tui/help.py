@@ -40,7 +40,8 @@ HELP = """\
   [cyan]mode[/] graph|addr                   graph mode: pure connectivity, no addressing rules
 [b]Loops, STP, storms[/]  switches run spanning tree unless it's switched off for them
   [cyan]broadcast[/] <id\\[:port]>                 flood one frame; into a live loop it becomes a storm
-  [cyan]lag[/] <switch> <switch> · [cyan]unlag[/] … · [cyan]lags[/]   bundle parallel cables into one link (no STP blocking, flows spread)
+  [cyan]lag[/] (find spans) · [cyan]lag auto[/] · [cyan]lag[/] <switch> <switch|router|gateway> · [cyan]unlag[/] … · [cyan]lags[/]
+                                    bundle parallel cables into one link (no STP blocking, flows spread)
   [cyan]stp[/]  ·  [cyan]stp[/] on|off  ·  [cyan]stp[/] <switch…> on|off  ·  [cyan]stp priority[/] <switch> <n>  ·  [cyan]demo loop[/]
 [b]Roles, failures, HA[/]
   [cyan]<id> <id> role=[/]data|control|control-backup|fabric   cable with a role (control = heartbeat only, ═)
