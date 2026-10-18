@@ -1,0 +1,45 @@
+# Save file format
+
+This is the complete JSON snapshot written by `save`. For the hand-writable,
+template-based YAML format, see [topology-format.md](topology-format.md).
+
+`save` writes, and `load` reads, a single JSON object. All keys except
+`counters`, `devices` and `links` are optional, so older files still load.
+
+```json
+{
+  "counters": { "g": 1, "r": 2, "s": 3, "c": 10 },
+  "devices": [
+    { "kind": "r", "num": 1, "nports": 6, "x": 64, "y": 1, "up": true }
+  ],
+  "links": [
+    { "a": "r1", "pa": 5, "b": "r2", "pb": 5, "role": "control", "up": true }
+  ],
+  "groups":   { "dc1": ["fab1", "rfab1"], "rfab1": ["r1", "r2"], "fab1": ["s1", "s2"] },
+  "clusters": { "rfab1": "witness" },
+  "ifaces": {
+    "c1:1": { "mode": "dhcp", "net": 1, "host": 10, "gw": 254, "via": "dhcp" }
+  },
+  "dhcp_off": ["r2"],
+  "stp_off": ["s4", "s5"],
+  "stp_priority": { "s7": 4096 }
+}
+```
+
+| Key | Meaning |
+|---|---|
+| `counters` | the last number used for each kind, so ids are never reused |
+| `devices[]` | `kind` (`g`/`r`/`s`/`c`) and `num` make the id (`r1`). Also `nports`, canvas position `x`/`y`, and `up` (false = failed) |
+| `links[]` | two ends (`a`/`pa`, `b`/`pb`; ports start at 1), `role` (`data`, `control`, `control-backup`, `fabric`) and `up` |
+| `groups` | group → members, in order. A member is a device id or another group's name (groups nest) |
+| `clusters` | groups that are HA clusters → split policy (`none`, `quorum`, `witness`) |
+| `ifaces` | `"device:port"` → address config. `mode`: `dhcp`, `adhoc`, `static`, `auto` (routers) or `none`. `net`/`host`: the address. `gw`: the gateway's host number on the same network (254 = cluster virtual gateway). `via`: how the current address was obtained |
+| `dhcp_off` | routers and gateways whose DHCP server is switched off |
+| `stp_off` | switches with spanning tree switched off (every other switch runs it) |
+| `stp_priority` | switch → bridge priority (default 32768; lower wins the root election) |
+
+Blocked ports and storms aren't saved: blocked ports are recomputed when a file
+is loaded, and a storm only starts when traffic is sent.
+
+Entries that refer to missing devices or groups are dropped on load. An
+address in an older format is also dropped, and recomputed from the cabling.

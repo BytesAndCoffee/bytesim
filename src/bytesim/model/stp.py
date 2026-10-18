@@ -1,0 +1,315 @@
+"""Switching loops: spanning tree (STP), loop detection, flooding, broadcast storms.
+
+Switches run STP unless it is switched off for them. STP picks a root bridge
+in every switched area, keeps the shortest path tree to it, and blocks one end
+of every other switch-to-switch cable, so no loop forwards frames. A loop with
+no STP switch able to block it stays live: the next broadcast into it circles
+forever and multiplies. That is a broadcast storm, and it saturates every
+cable it touches until the loop is broken.
+"""
+from __future__ import annotations
+
+from collections import Counter, deque
+from dataclasses import dataclass, field
+
+from ..constants import RANK
+from .base import NetworkBase
+from .types import Link
+
+DEFAULT_PRIORITY = 32768
+
+
+@dataclass
+class Flood:
+    """What happened to one broadcast frame, generation by generation."""
+    source: tuple[str, int]
+    generations: list[dict[tuple[int, str], int]] = field(default_factory=list)  # (link, arriving at) -> copies
+    delivered: Counter = field(default_factory=Counter)      # (device, port) -> copies received
+    storm: bool = False
+    storm_switches: set[str] = field(default_factory=set)
+    storm_links: set[int] = field(default_factory=set)
+    flaps: dict[str, set[int]] = field(default_factory=dict)  # switch -> ports the source MAC arrived on
+
+    @property
+    def totals(self) -> list[int]:
+        return [sum(g.values()) for g in self.generations]
+
+
+class SpanningTreeMixin(NetworkBase):
+    # ---- configuration -------------------------------------------------
+    def stp_enabled(self, switch: str) -> bool:
+        return switch not in self.stp_off
+
+    def bridge_id(self, switch: str) -> tuple[int, int, int]:
+        """Lower wins the root election: priority, then kind and number."""
+        d = self.devices[switch]
+        return self.stp_priority.get(switch, DEFAULT_PRIORITY), RANK[d.kind], d.num
+
+    # ---- the switch-to-switch graph -------------------------------------
+    def _carries(self, l: Link, honor_stp: bool) -> bool:
+        """Could this cable forward frames, storms aside? (STP blocks optional.)"""
+        if not (l.up and not l.control and self.devices[l.a].up and self.devices[l.b].up):
+            return False
+        return not (honor_stp and ((l.a, l.pa) in self.stp_blocked or (l.b, l.pb) in self.stp_blocked))
+
+    def _trunks(self, honor_stp: bool) -> list[int]:
+        """Indices of cables joining two switches that can forward frames."""
+        return [i for i, l in enumerate(self.links)
+                if self.devices[l.a].kind == "s" and self.devices[l.b].kind == "s"
+                and self._carries(l, honor_stp)]
+
+    def _areas(self, trunks: list[int]) -> list[set[str]]:
+        """Switches grouped into areas joined by the given trunks."""
+        adj: dict[str, set[str]] = {d.id: set() for d in self.devices.values() if d.kind == "s"}
+        for i in trunks:
+            l = self.links[i]
+            adj[l.a].add(l.b)
+            adj[l.b].add(l.a)
+        out, seen = [], set()
+        for s in sorted(adj, key=lambda s: self.bridge_id(s)):
+            if s in seen:
+                continue
+            comp, q = {s}, deque([s])
+            while q:
+                for v in adj[q.popleft()]:
+                    if v not in comp:
+                        comp.add(v)
+                        q.append(v)
+            seen |= comp
+            out.append(comp)
+        return out
+
+    def loop_links(self, honor_stp: bool = True) -> set[int]:
+        """Trunks that lie on a loop (any cable that isn't a bridge in the graph theory sense)."""
+        trunks = self._trunks(honor_stp)
+        adj: dict[str, list[tuple[str, int]]] = {}
+        for i in trunks:
+            l = self.links[i]
+            adj.setdefault(l.a, []).append((l.b, i))
+            adj.setdefault(l.b, []).append((l.a, i))
+        disc: dict[str, int] = {}
+        low: dict[str, int] = {}
+        bridges: set[int] = set()
+        timer = [0]
+
+        def dfs(u: str, via: int) -> None:            # Tarjan's bridge finding (multigraph-safe)
+            disc[u] = low[u] = timer[0]
+            timer[0] += 1
+            for v, i in adj.get(u, []):
+                if i == via:
+                    continue
+                if v in disc:
+                    low[u] = min(low[u], disc[v])
+                else:
+                    dfs(v, i)
+                    low[u] = min(low[u], low[v])
+                    if low[v] > disc[u]:
+                        bridges.add(i)
+
+        for s in adj:
+            if s not in disc:
+                dfs(s, -1)
+        return set(trunks) - bridges
+
+    # ---- spanning tree ---------------------------------------------------
+    def stp_compute(self) -> tuple[set[tuple[str, int]], dict[str, str], dict[str, int]]:
+        """Blocked ports, each switch's root bridge, and each switch's root port.
+
+        Per switched area, the root is the STP switch with the lowest bridge id.
+        Switches without STP pass STP frames straight through (as real ones do),
+        so they can't block anything but don't hide loops either. Cables with
+        no STP end always forward; every other cable is added nearest-the-root
+        first, and one that would close a loop is blocked at its end farther
+        from the root (or its only STP end). What's left is loop-free except
+        for loops made entirely of non-STP switches, which nothing can break.
+        """
+        trunks = self._trunks(honor_stp=False)
+        blocked: set[tuple[str, int]] = set()
+        roots: dict[str, str] = {}
+        root_ports: dict[str, int] = {}
+        for area in self._areas(trunks):
+            bridges = [s for s in area if self.stp_enabled(s)]
+            if not bridges:
+                continue
+            root = min(bridges, key=self.bridge_id)
+            for s in area:
+                roots[s] = root
+            here = [i for i in trunks if self.links[i].a in area]
+            cost = self._hops_from(root, here)
+
+            parent = {s: s for s in area}           # union-find over what forwards
+
+            def find(s: str) -> str:
+                while parent[s] != s:
+                    parent[s] = parent[parent[s]]
+                    s = parent[s]
+                return s
+
+            def rank(i: int) -> tuple:
+                l = self.links[i]
+                near, far = sorted([(l.a, l.pa), (l.b, l.pb)],
+                                   key=lambda e: (cost[e[0]], self.bridge_id(e[0])))
+                return (cost[far[0]], cost[near[0]], self.bridge_id(near[0]), near[1])
+
+            forced = [i for i in here if not (self.stp_enabled(self.links[i].a)
+                                              or self.stp_enabled(self.links[i].b))]
+            for i in forced + sorted((i for i in here if i not in forced), key=rank):
+                l = self.links[i]
+                ra, rb = find(l.a), find(l.b)
+                if ra != rb:
+                    parent[ra] = rb
+                    continue
+                if i in forced:
+                    continue                         # an unbreakable loop: no STP end
+                ends = sorted([(l.a, l.pa), (l.b, l.pb)],
+                              key=lambda e: (cost[e[0]], self.bridge_id(e[0])), reverse=True)
+                blocked.add(next(e for e in ends if self.stp_enabled(e[0])))
+            # Root port: the forwarding cable that leads one hop closer to the root.
+            fwd = [i for i in here if (self.links[i].a, self.links[i].pa) not in blocked
+                   and (self.links[i].b, self.links[i].pb) not in blocked]
+            dist = self._hops_from(root, fwd)
+            for s in area:
+                if s == root or not self.stp_enabled(s) or s not in dist:
+                    continue
+                best = min(((self.bridge_id(self.links[i].other(s)[0]), self.links[i].port_of(s))
+                            for i in fwd if self.links[i].touches(s)
+                            and dist.get(self.links[i].other(s)[0], 10**9) < dist[s]), default=None)
+                if best:
+                    root_ports[s] = best[1]
+        return blocked, roots, root_ports
+
+    def _hops_from(self, start: str, trunks: list[int]) -> dict[str, int]:
+        dist = {start: 0}
+        q = deque([start])
+        while q:
+            u = q.popleft()
+            for i in trunks:
+                l = self.links[i]
+                if l.touches(u) and (v := l.other(u)[0]) not in dist:
+                    dist[v] = dist[u] + 1
+                    q.append(v)
+        return dist
+
+    def port_role(self, switch: str, port: int) -> str:
+        """root / designated / blocking / edge, or '' (unplugged, or STP off)."""
+        li = self.link_index(switch, port)
+        if li is None:
+            return ""
+        if (switch, port) in self.stp_blocked:
+            return "blocking"
+        if self.devices[self.links[li].other(switch)[0]].kind != "s":
+            return "edge"
+        if not self.stp_enabled(switch) or switch not in self.stp_roots:
+            return ""
+        return "root" if self.stp_root_ports.get(switch) == port else "designated"
+
+    def stp_update(self) -> list[str]:
+        """Re-run STP and end storms whose loop is gone. Returns notes on what changed."""
+        notes = []
+        before = self.stp_blocked
+        self.stp_blocked, self.stp_roots, self.stp_root_ports = self.stp_compute()
+        for sw, p in sorted(before - self.stp_blocked):
+            li = self.link_index(sw, p) if sw in self.devices else None
+            if li is not None and self._carries(self.links[li], honor_stp=False):
+                notes.append(f"STP {sw}:p{p} blocking → forwarding")
+        for sw, p in sorted(self.stp_blocked - before):
+            notes.append(f"STP {sw}:p{p} → blocking")
+        if self.storming:
+            # A storm lives as long as its area still has a forwarding loop.
+            looped = {d for i in self.loop_links(honor_stp=True)
+                      for d in (self.links[i].a, self.links[i].b)}
+            still: set[str] = set()
+            for area in self._areas(self._trunks(honor_stp=True)):
+                if area & self.storming and area & looped:
+                    still |= area & self.storming
+            ended = self.storming - still
+            if ended:
+                self.storming = still
+                for s in ended:
+                    self.mac_flaps.pop(s, None)
+                notes.append(f"broadcast storm over: {' '.join(sorted(ended, key=self.bridge_id))} "
+                             f"(loop broken)")
+        return notes
+
+    # ---- flooding ----------------------------------------------------------
+    def flood(self, src: tuple[str, int]) -> Flood:
+        """Send one broadcast frame out of an interface and follow every copy.
+
+        Switches copy it out of every forwarding port except the one it came in
+        on; anything else just receives it. Copies are counted exactly per
+        (cable, direction), so even an exponential storm stays cheap to model.
+        A loop-free area empties within as many hops as there are cables; if
+        frames are still alive after that, they are circling: a storm.
+        """
+        out = Flood(source=src)
+        li0 = self.link_index(*src)
+        if li0 is None:
+            return out
+
+        def ok(l: Link) -> bool:
+            return (self._carries(l, honor_stp=True)
+                    and l.a not in self.storming and l.b not in self.storming)
+
+        if not ok(self.links[li0]):
+            return out
+        state: Counter = Counter({(li0, self.links[li0].other(src[0])[0]): 1})
+        for _ in range(len(self.links) + 2):
+            out.generations.append(dict(state))
+            nxt: Counter = Counter()
+            for (li, dev), n in state.items():
+                port = self.links[li].port_of(dev)
+                if self.devices[dev].kind != "s":
+                    out.delivered[(dev, port)] += n
+                    continue
+                out.flaps.setdefault(dev, set()).add(port)
+                for lj, l in enumerate(self.links):
+                    if lj != li and l.touches(dev) and ok(l):
+                        nxt[(lj, l.other(dev)[0])] += n
+            if not nxt:
+                break
+            state = nxt
+        else:
+            out.storm = True
+            # Everything the circling frames touched over the last lap (a loop can't
+            # be longer than the number of cables), not just where they are now.
+            lap = out.generations[-(len(self.links) + 1):] + [dict(state)]
+            out.storm_links = {li for gen in lap for li, _ in gen}
+            out.storm_switches = {d for li in out.storm_links for d in (self.links[li].a, self.links[li].b)
+                                  if self.devices[d].kind == "s"}
+        out.flaps = {s: ps for s, ps in out.flaps.items() if len(ps) > 1}
+        return out
+
+    def start_storm(self, flood: Flood) -> None:
+        """Mark a storming area: its cables carry nothing but the storm from now on."""
+        mac = self.devices[flood.source[0]].mac(flood.source[1])
+        area = set()
+        for a in self._areas(self._trunks(honor_stp=True)):
+            if a & flood.storm_switches:
+                area |= a
+        self.storming |= area
+        for s, ports in flood.flaps.items():
+            self.mac_flaps.setdefault(s, {})[mac] = ports
+
+    def learn_flood(self, flood: Flood) -> None:
+        """Switches a (loop-free) broadcast passed through learn its sender's MAC."""
+        mac = self.devices[flood.source[0]].mac(flood.source[1])
+        for gen in flood.generations:
+            for li, dev in gen:
+                if self.devices[dev].kind == "s":
+                    self.mac_tables.setdefault(dev, {})[mac] = self.links[li].port_of(dev)
+
+    def storm_near(self, dev_id: str) -> set[str]:
+        """Storming switches in the switched area(s) this device is plugged into."""
+        seen, q, hit = {dev_id}, deque([dev_id]), set()
+        while q:
+            u = q.popleft()
+            for l in self.links:
+                if l.touches(u) and self._carries(l, honor_stp=True):
+                    v = l.other(u)[0]
+                    if v in seen or self.devices[v].kind != "s":
+                        continue
+                    seen.add(v)
+                    q.append(v)
+                    if v in self.storming:
+                        hit.add(v)
+        return hit

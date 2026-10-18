@@ -1,0 +1,58 @@
+[build-system]
+requires = ["hatchling>=1.24"]
+build-backend = "hatchling.build"
+
+[project]
+name = "bytesim"
+dynamic = ["version"]
+description = "A text-mode network simulator: cable up gateways, routers, switches and computers, then watch DHCP, routing, multicast and HA failover in your terminal."
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Michael Yazdani" }]
+keywords = ["network", "simulator", "tui", "textual", "networking", "education", "dhcp", "routing"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: Education",
+    "Intended Audience :: Developers",
+    "Intended Audience :: System Administrators",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Education",
+    "Topic :: System :: Networking",
+    "Typing :: Typed",
+]
+dependencies = ["textual>=6.0", "pyyaml>=6.0"]
+
+[project.optional-dependencies]
+dev = ["pytest>=7", "build", "twine", "pyflakes"]
+
+[project.scripts]
+bytesim = "bytesim.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/BytesAndCoffee/bytesim"
+Documentation = "https://github.com/BytesAndCoffee/bytesim/tree/main/docs"
+Repository = "https://github.com/BytesAndCoffee/bytesim"
+Issues = "https://github.com/BytesAndCoffee/bytesim/issues"
+Changelog = "https://github.com/BytesAndCoffee/bytesim/blob/main/CHANGELOG.md"
+
+[tool.hatch.version]
+path = "src/bytesim/__init__.py"
+
+[tool.hatch.build.targets.sdist]
+include = ["src/bytesim", "tests", "docs", "README.md", "CHANGELOG.md", "LICENSE"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/bytesim"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
