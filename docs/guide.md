@@ -8,6 +8,7 @@
 - [Renumbering (BFS / DFS)](#renumbering-bfs--dfs)
 - [Addressing](#addressing)
 - [Sending traffic](#sending-traffic)
+- [Random traffic](#random-traffic)
 - [Loops, spanning tree and broadcast storms](#loops-spanning-tree-and-broadcast-storms)
 - [Cable roles and failures](#cable-roles-and-failures)
 - [HA router clusters](#ha-router-clusters)
@@ -286,6 +287,42 @@ cable crossings it took, compared with sending a separate unicast to each
 receiver. A device blinks when a packet arrives, and the cables in use stay
 highlighted until the packet is delivered.
 
+## Random traffic
+
+```text
+traffic on                  2 packets a second between random computers
+traffic on 10 seed=42       10 a second, the same flows every time you use seed 42
+traffic on 5 hosts=office1  only computers in a group send and receive
+traffic on mix=unicast      only some kinds (unicast, internet, broadcast)
+traffic                     statistics
+traffic rate 20  ·  traffic reset  ·  traffic off
+```
+
+Computers send random packets at a steady rate. By default about three in four
+go to another computer, some go to the internet through a gateway, and a few
+are broadcasts. Every packet follows the same rules as `ping`: addresses and
+gateways (or plain cabling in graph mode), STP, failures, clusters. Switches
+learn MACs from it. A broadcast or ARP into a live loop sets off a storm, as it
+would in a real network.
+
+- Traffic packets have their own colours: blue for unicast, pink for internet,
+  pale yellow for broadcasts.
+- Cables are shaded by how busy they've been in the last few seconds, from
+  light to heavy, so bottlenecks show up.
+- `traffic` reports:
+  - packets sent, delivered, in flight, and dropped, with the reason
+    (unreachable, no address, storm, device down);
+  - the mix of traffic kinds;
+  - the busiest cables and the devices that forwarded the most;
+  - the top talkers.
+
+  The inspector shows a running total, and the per-device counters for the
+  selected device.
+
+Try `demo ha`, `traffic on 8`, then `fail r1` and watch the traffic move to r2.
+Or `demo loop`, `traffic on`: the first broadcast storms. Traffic isn't
+recorded for undo, and it pauses while a script runs.
+
 ## Loops, spanning tree and broadcast storms
 
 Switches forward a broadcast out of every port except the one it came in on.
@@ -515,6 +552,7 @@ them, and a group name on its own selects the group.
 | `unicast <src> <dst>` | `ucast`, `send` | one-way packet |
 | `multicast <src> <dst…>` | `mcast` | one-to-many packet |
 | `mode graph\|addr` | | graph or address mode |
+| `traffic on [rate] [seed=] [hosts=] [mix=]`, `traffic [off\|rate n\|reset]` | | random background traffic and statistics |
 | `broadcast <id[:port]>` | `bcast`, `flood` | flood one frame (storms in a live loop) |
 | `stp [on\|off]`, `stp <switch…> on\|off`, `stp priority <switch> <n>` | | spanning tree |
 | `renumber [auto] bfs\|dfs [root]`, `renumber off` | `rename` | renumber ids in traversal order |

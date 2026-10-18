@@ -44,6 +44,8 @@ forwarding, failure) and leaves out the detail that gets in the way:
   of router r1.
 - **DHCP and ad-hoc addressing**, animated as broadcast-then-reply.
 - **Routing** through gateways and between routers, with ARP shown for every hop.
+- **Random traffic** with per-cable load shading and statistics (drops, busiest
+  cables, top talkers), reproducible with a seed.
 - **Unicast, ping and multicast.** With multicast you can see the packet copied
   wherever the paths split.
 - **Cable roles** (data, control, fabric) and failures you can trigger by hand.

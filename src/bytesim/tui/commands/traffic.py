@@ -2,11 +2,13 @@
 from __future__ import annotations
 
 import random
+import time
 
 from rich.markup import escape
 
 from ...constants import ADDR, HOST_MAX, REF
 from ...model import Leg, NetError, fmt
+from ...model.traffic import TRAFFIC_KINDS, TrafficGenerator, drop_reason
 from ..cables import route
 from .base import CommandHost
 from .registry import command
@@ -310,3 +312,164 @@ class TrafficCommands(CommandHost):
 
         for dst, p in paths.items():
             c.send_packet(self._cells(p), "bright_magenta", lambda d=dst: arrived(d))
+
+    # ---- random background traffic --------------------------------------------
+    TRAFFIC_COLORS = {"unicast": "sky_blue1", "internet": "plum2", "broadcast": "khaki1"}
+    traffic: TrafficGenerator | None = None
+
+    @command("traffic")
+    def cmd_traffic(self, args: list[str], opts: dict[str, str]) -> None:
+        usage = ("usage: traffic on [packets/s] [seed=N] [hosts=<group>] [mix=unicast,internet,broadcast]"
+                 "  ·  traffic off  ·  traffic rate <n>  ·  traffic reset  ·  traffic")
+        word = args[0].lower() if args else ""
+        if word == "":
+            self._traffic_report()
+        elif word == "on":
+            rate = self._rate(args[1]) if len(args) > 1 else 2.0
+            hosts = None
+            if "hosts" in opts:
+                g = opts["hosts"]
+                if g not in self.net.groups:
+                    raise NetError(f"hosts=: no group {g}")
+                hosts = {d for d in self.net.devices_in(g) if self.net.devices[d].kind == "c"}
+                if not hosts:
+                    raise NetError(f"{g} has no computers to send traffic")
+            mix = None
+            if "mix" in opts:
+                kinds = [k for k in opts["mix"].split(",") if k]
+                bad = [k for k in kinds if k not in TRAFFIC_KINDS]
+                if bad or not kinds:
+                    raise NetError(f"mix=: choose from {', '.join(TRAFFIC_KINDS)}")
+                mix = {k: 1.0 for k in kinds}
+            seed = int(opts["seed"]) if "seed" in opts and opts["seed"].isdigit() else None
+            self.traffic = TrafficGenerator(rate, seed, hosts, mix)
+            self._traffic_clock = time.monotonic()
+            timer = getattr(self, "_traffic_timer", None)
+            if timer is None and hasattr(self, "set_interval"):
+                self._traffic_timer = self.set_interval(0.1, self._traffic_tick)  # type: ignore[attr-defined]
+            who = f"computers in {opts['hosts']}" if hosts else "every computer"
+            self.log_msg(f"[green]traffic on[/]: {rate:g} packets/s from {who}"
+                         + (f", seed {seed}" if seed is not None else "")
+                         + (f", {'+'.join(mix)} only" if mix else "")
+                         + "  [dim](traffic off to stop; traffic for statistics)[/]")
+        elif word == "off":
+            if self.traffic is None:
+                raise NetError("traffic is already off")
+            timer = getattr(self, "_traffic_timer", None)
+            if timer is not None:
+                timer.stop()
+                self._traffic_timer = None
+            self._traffic_report(final=True)
+            self.traffic = None
+            self.refresh_sidebar()
+        elif word == "rate" and len(args) == 2:
+            if self.traffic is None:
+                raise NetError("traffic is off: traffic on <rate>")
+            self.traffic.rate = self._rate(args[1])
+            self.log_msg(f"traffic rate: {self.traffic.rate:g} packets/s")
+        elif word == "reset":
+            if self.traffic is None:
+                raise NetError("traffic is off")
+            from ...model.traffic import TrafficStats
+            self.traffic.stats = TrafficStats()
+            self.log_msg("traffic statistics cleared")
+        else:
+            raise NetError(usage)
+
+    @staticmethod
+    def _rate(tok: str) -> float:
+        try:
+            rate = float(tok)
+        except ValueError:
+            raise NetError("the rate is packets per second, e.g. traffic on 5") from None
+        if not 0 < rate <= 50:
+            raise NetError("rate must be more than 0 and at most 50 packets/s")
+        return rate
+
+    def _traffic_tick(self) -> None:
+        now = time.monotonic()
+        dt, self._traffic_clock = now - self._traffic_clock, now
+        self.traffic_step(dt)
+
+    def traffic_step(self, dt: float) -> int:
+        """Advance the traffic by dt seconds; returns how many packets were sent."""
+        gen = self.traffic
+        if gen is None or (self.replaying and not self.headless):   # paused while the app runs a script
+            return 0
+        gen.cool(dt)
+        n = gen.due(dt)
+        for _ in range(n):
+            self._send_random(gen)
+        if n:
+            self.refresh_sidebar()
+        self.canvas.refresh()
+        return n
+
+    def _send_random(self, gen: TrafficGenerator) -> None:
+        flow = gen.pick(self.net)
+        if flow is None:
+            return
+        kind, src, dst = flow
+        net, c = self.net, self.canvas
+        color = self.TRAFFIC_COLORS[kind]
+        if kind == "broadcast":
+            nic = next((src, p) for p in range(1, net.devices[src].nports + 1)
+                       if net.link_index(src, p) is not None)
+            if net.storm_near(src):
+                gen.stats.drop(src, kind, "storm")
+                return
+            fl = net.flood(nic)
+            if not fl.generations:
+                gen.stats.drop(src, kind, "unreachable")
+                return
+            if fl.storm:
+                gen.stats.drop(src, kind, "storm")
+                self.set_off_storm(fl, f"a random broadcast from {src}")  # type: ignore[attr-defined]
+                return
+            net.learn_flood(fl)
+            gen.stats.sent += 1
+            gen.stats.kinds[kind] += 1
+            gen.stats.talkers[src] += 1
+            for g in fl.generations:
+                for li, _ in g:
+                    key = id(net.links[li])
+                    gen.load[key] = gen.load.get(key, 0.0) + 1.0
+            self.animate_flood(fl, color, lambda: gen.stats.arrive(src), max_hops=4)  # type: ignore[attr-defined]
+            return
+        try:
+            _, path, legs, _ = self._plan(src, dst)
+        except NetError as e:
+            gen.stats.drop(src, kind, drop_reason(str(e)))
+            return
+        if len(path) < 2:
+            return
+        self._learn(legs)
+        gen.stats.record(net, kind, path)
+        gen.carry(net, path)
+        end = path[-1][0]
+        c.send_packet(self._cells(path), color, lambda: gen.stats.arrive(end))
+
+    def _traffic_report(self, final: bool = False) -> None:
+        gen = self.traffic
+        if gen is None:
+            self.log_msg("[dim]traffic is off — traffic on [rate] starts it[/]")
+            return
+        st = gen.stats
+        mins, secs = divmod(int(gen.elapsed), 60)
+        head = "traffic stopped" if final else f"traffic [green]on[/]: {gen.rate:g} packets/s"
+        self.log_msg(f"{head} · ran {mins}m {secs:02d}s" + (f" · seed {gen.seed}" if gen.seed is not None else ""))
+        drops = ", ".join(f"{r} {n}" for r, n in st.dropped.most_common())
+        self.log_msg(f"  sent {st.sent} · delivered {st.delivered} · in flight {max(0, st.in_flight)} · "
+                     f"dropped {sum(st.dropped.values())}" + (f" ({drops})" if drops else ""))
+        if st.kinds:
+            self.log_msg("  mix: " + ", ".join(f"{k} {st.kinds[k]}" for k in TRAFFIC_KINDS if st.kinds[k]))
+
+        def top(counter, n=4):
+            return " · ".join(f"{escape(k)} {v}" for k, v in counter.most_common(n))
+
+        if st.cables:
+            self.log_msg(f"  busiest cables: {top(st.cables)}")
+        if st.forwarded:
+            self.log_msg(f"  busiest devices (forwarded): {top(st.forwarded)}")
+        if st.talkers:
+            self.log_msg(f"  top talkers: {top(st.talkers)}")

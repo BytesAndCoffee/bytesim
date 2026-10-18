@@ -140,7 +140,7 @@ class ByteSimApp(TopologyCommands, GroupCommands, AddressCommands, TrafficComman
         c = self.canvas
         self.query_one("#info", Static).update(
             render_inspector(self.net, c.selected, c.selected_group, self.graph, self.auto,
-                             self.naming_text()))
+                             self.naming_text(), self.traffic))
 
     # ---- the command line ----------------------------------------------
     def on_input_submitted(self, event: Input.Submitted) -> None:

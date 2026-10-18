@@ -26,6 +26,8 @@ HELP = """\
   [cyan]export script[/] \\[readable|shortest|explicit] \\[file]   the commands that rebuild this network
   [cyan]run[/] <file>                       run a script of commands (after [cyan]clear[/] for an export)
   [cyan]groups[/] · [cyan]auto[/] (re-arrange) · [cyan]list[/] · [cyan]demo[/] · [cyan]clear[/] · [cyan]save[/]/[cyan]load[/] \\[file] · [cyan]quit[/]
+  [cyan]traffic on[/] \\[packets/s] \\[seed=N] \\[hosts=group] \\[mix=unicast,internet,broadcast]   random traffic
+  [cyan]traffic[/] (statistics) · [cyan]traffic rate[/] <n> · [cyan]traffic reset[/] · [cyan]traffic off[/]
 [b]Addressing[/]  an address is (network, host): network id + 8-bit host, e.g. [i](2,14)[/]
   MACs name the physical port: R1A = r1 port 1. A network spans every switch it touches.
   Routers/gateways take host 1, 2… on each network and serve DHCP; computers lease hosts 10+,

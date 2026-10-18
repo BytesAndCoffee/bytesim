@@ -27,6 +27,7 @@ src/bytesim/
 │   ├── naming.py        BFS/DFS traversal, renumber()
 │   ├── stp.py           spanning tree, loop detection, flooding, storms
 │   ├── equivalence.py   canonical form of a network; differences()
+│   ├── traffic.py       random traffic: generator (seeded), cable load, statistics
 │   └── network.py       Network = all mixins + editing + JSON
 └── tui/
     ├── app.py           ByteSimApp: layout, dispatch(), changed()

@@ -5,6 +5,7 @@ GROUP_COLORS = ["orange1", "orchid", "spring_green2", "gold1", "deep_sky_blue1",
 
 ROLE_COLOR = {"data": "grey50", "control": "orchid", "control-backup": "orchid", "fabric": "dark_cyan"}
 
+HEAT = ("bold dark_orange", "gold1", "dark_khaki")   # cable load: heavy, busy, light
 HA_COLOR = {"ok": "green", "degraded": "orange1", "split": "bold red", "down": "red"}
 
 

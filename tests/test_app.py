@@ -213,3 +213,34 @@ def test_a_failed_script_is_one_undo_step(tmp_path):
     path.write_text("add s 4 2\ns1 s2\nfrobnicate\n")
     app, log = asyncio.run(_session([f"run {path}", "undo"]))
     assert app.net.devices == {}                             # the half-built network is gone
+
+
+def test_traffic_command():
+    async def go():
+        app = ByteSimApp()
+        async with app.run_test(size=(170, 60)) as pilot:
+            async def run(cmd, wait=0.1):
+                box = app.query_one("#cmd")
+                box.focus()
+                box.value = cmd
+                await pilot.press("enter")
+                await pilot.pause(wait)
+
+            await run("demo ha")
+            steps = len(app.undo_stack)
+            await run("traffic on 20 seed=5", wait=2.5)
+            sent = app.traffic.stats.sent
+            await run("traffic rate 2")
+            await run("traffic")
+            await run("traffic off")
+            await run("traffic off")
+            await run("traffic on 99")
+            await run("traffic on 2 hosts=nope")
+            log = " ".join(" ".join(l.text for l in app.query_one("#log").lines).split())
+            return sent, steps, len(app.undo_stack), app.traffic, log
+
+    sent, before, after, gen, log = asyncio.run(go())
+    assert sent > 10 and gen is None
+    assert after == before                       # traffic doesn't add undo steps
+    assert "traffic rate: 2 packets/s" in log and "traffic stopped" in log and "busiest cables" in log
+    assert "already off" in log and "at most 50" in log and "no group nope" in log

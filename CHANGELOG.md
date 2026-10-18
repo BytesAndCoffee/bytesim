@@ -32,4 +32,6 @@ First release.
   rebuild the network, reusing repeated groups with clone / copy / ports copy; every
   script is verified by replaying it. `run <file>` replays scripts.
 - Multi-level undo and redo (`undo [n]`, `redo [n]`, `history`, `u` / `U`), up to 100 steps.
+- Random background traffic (`traffic on [rate] [seed=] [hosts=] [mix=]`) with cable load
+  shading, drop reasons and statistics.
 - JSON save and load; a `bytesim` command with `--demo` and `--run`.

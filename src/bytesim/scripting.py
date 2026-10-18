@@ -65,6 +65,7 @@ class ScriptRunner(TopologyCommands, GroupCommands, AddressCommands, TrafficComm
         self.auto = False
         self.graph = False
         self.replaying = 1            # always "in a script": no per-command side effects
+        self.headless = True
         self.naming = None
         self.log: list[str] = []
         self._ha_seen: dict = {}

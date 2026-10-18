@@ -14,11 +14,15 @@ def mode_text(ifc: Iface) -> str:
 
 
 def render_inspector(net: Network, sel: str | None, selected_group: str | None,
-                     graph: bool, auto: bool, naming: str = "off") -> str:
+                     graph: bool, auto: bool, naming: str = "off", traffic=None) -> str:
     out = [f"mode: [b]{'graph' if graph else 'addr'}[/]  ·  auto-arrange: "
            f"{'[green]on[/]' if auto else '[yellow]off[/]'}",
            f"auto-renumber: {'[dim]off[/]' if naming == 'off' else f'[cyan]{naming}[/]'}",
            f"{len(net.devices)} devices · {len(net.links)} cables", ""]
+    if traffic is not None:
+        st = traffic.stats
+        out.insert(-1, f"traffic [green]on[/] {traffic.rate:g}/s · {st.delivered} delivered · "
+                       f"{sum(st.dropped.values())} dropped")
     if net.storming:
         out[-1:] = [f"[b red]⚡ broadcast storm:[/] [red]{' '.join(sorted(net.storming, key=net.bridge_id))}[/]", ""]
     for k, (name, _, color) in KINDS.items():
@@ -63,6 +67,11 @@ def render_inspector(net: Network, sel: str | None, selected_group: str | None,
         g = chain[-1] if chain else None
         out.append(f"[b reverse {d.color}] {d.id} [/] [b]{d.name}[/]  {used}/{d.nports} {kind}"
                    + ("  [b red]✕ DOWN[/]" if not d.up else ""))
+        if traffic is not None and any(c[d.id] for c in (traffic.stats.talkers, traffic.stats.received,
+                                                          traffic.stats.forwarded, traffic.stats.drops_at)):
+            st = traffic.stats
+            out.append(f"[sky_blue1]traffic[/] sent {st.talkers[d.id]} · received {st.received[d.id]}"
+                       f" · forwarded {st.forwarded[d.id]} · dropped {st.drops_at[d.id]}")
         out.append(f"[dim]position {d.x},{d.y}[/]"
                    + (f"  [{group_color(g)}]{' › '.join(chain)}[/]" if g else ""))
         if d.kind in "rg" and not graph:
