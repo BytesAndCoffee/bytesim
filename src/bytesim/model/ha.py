@@ -76,6 +76,8 @@ class HAMixin(NetworkBase):
         forwarders = set(leaders) if mode == "active-passive" else {m for p in active for m in p}
         standby = [m for m in alive if m not in forwarders]
         on_standby = f", {' '.join(standby)} standby" if mode == "active-passive" and standby else ""
+        if mode == "active-active" and len(forwarders) > 1 and len(active) == 1:
+            leaders = [" + ".join(m for m in active[0] if m in forwarders)]   # all of them forward
         if not alive:
             level, text = "down", "DOWN · every member has failed"
         elif len(active) > 1:
@@ -98,8 +100,9 @@ class HAMixin(NetworkBase):
                 "mode": mode, "forwarders": forwarders, "standby": standby}
 
     def standby_routers(self) -> set[str]:
-        """Members of active-passive clusters that must not forward transit traffic now."""
-        return {m for c in self.cluster_modes if c in self.clusters for m in self.ha_state(c)["standby"]}
+        """Cluster members that must not forward transit traffic right now: an
+        active-passive standby, or any member whose side lost the election."""
+        return {m for c in self.clusters for m in self.ha_state(c)["standby"]}
 
     def vip_owners(self, net: int) -> list[tuple[str, int]]:
         return [o for c in self.clusters for o in self.ha_state(c)["owners"].get(net, [])]

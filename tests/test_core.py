@@ -122,3 +122,14 @@ def test_synthesis_reuses_a_site_and_its_core_uplinks():
     res = synthesize(demos.core()[0], "shortest")
     assert sum(1 for s in res.used if s.kind in ("copy", "ports") and s.pairs == [("core", "core")]) == 2
     assert res.commands < res.explicit_commands
+
+
+def test_a_member_that_stood_down_stops_forwarding_in_active_active_too(core):
+    core.cluster_modes.pop("core")                                   # active-active
+    assert "r1 + r2 active" in core.ha_state("core")["text"]
+    for p in (7, 8):                                                 # split; witness keeps r1's side
+        core.links[core.link_index("r1", p)].up = False
+    assert core.ha_state("core")["forwarders"] == {"r1"} and core.standby_routers() == {"r2"}
+    for a in ("c1", "c2"):
+        for b in ("c3", "c4", "c5", "c6"):
+            assert "r2" not in hops(core, a, b)
