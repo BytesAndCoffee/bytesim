@@ -1,3 +1,4 @@
+<img width="2670" height="1522" alt="bytesim" src="https://github.com/user-attachments/assets/db5e77d5-df6b-4357-8fb3-aa01d70c67ef" />
 # ByteSim
 
 [![CI](https://github.com/BytesAndCoffee/bytesim/actions/workflows/ci.yml/badge.svg)](https://github.com/BytesAndCoffee/bytesim/actions/workflows/ci.yml)
@@ -29,6 +30,7 @@ DHCP, routing, multicast and router failover happen packet by packet.
          └────┘    └────┘    └────┘      └────┘    └────┘    └────┘
          (1,10)    (1,11)    (1,12)      (2,10)    (2,11)    (2,12)
 ```
+<img width="2670" height="1522" alt="bytesim" src="https://github.com/user-attachments/assets/f99b2ff4-99e9-45be-98dc-c8a7686ee1f6" />
 
 ByteSim keeps what matters about networking (graphs, broadcast domains,
 forwarding, failure) and leaves out the detail that gets in the way:
