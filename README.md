@@ -1,4 +1,3 @@
-<img width="2670" height="1522" alt="bytesim" src="https://github.com/user-attachments/assets/db5e77d5-df6b-4357-8fb3-aa01d70c67ef" />
 # ByteSim
 
 [![CI](https://github.com/BytesAndCoffee/bytesim/actions/workflows/ci.yml/badge.svg)](https://github.com/BytesAndCoffee/bytesim/actions/workflows/ci.yml)
