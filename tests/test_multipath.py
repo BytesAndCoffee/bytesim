@@ -278,3 +278,27 @@ def test_remembered_structure_never_outlives_a_call():
     net.lags = {p for p in net.lags if "fab" not in p}
     assert net.end("s1") == "s1" and all(net.bundle(l) is None for l in net.links)
     assert net._memo is None
+
+
+def test_mlag_demo_bundles_every_tier_and_survives_one_failure_per_tier():
+    net, _ = demos.mlag()
+    net.reconcile()
+    assert len(net.mlag_domains) == 7 and not net.stp_blocked
+    assert net.aggregatable() == [] and all(net.lag_problem(*sorted(p)) is None for p in net.lags)
+    for down in ("", "fail s1\nfail s4\nfail s8\nfail s16:1\nfail r2"):
+        n, _ = demos.mlag()
+        n.reconcile()
+        n.auto_layout(100)
+        r = ScriptRunner(n)
+        r.run(f"{down}\nmping all all".strip())
+        summaries = [line for line in r.log if "multicast ping:" in line]
+        assert len(summaries) == 8 and all("7/7 replies, 0 failed" in s for s in summaries), summaries
+
+
+@pytest.mark.parametrize("mode", MODES)
+def test_mlag_demo_round_trips(mode):
+    net, _ = demos.mlag()
+    net.reconcile()
+    for back in (Network.from_json(net.to_json()), load_topology(dump_topology(net, pin_ports=True))):
+        assert back.mlag_domains == net.mlag_domains and back.lags == net.lags
+    assert differences(net, replay(synthesize(net, mode).script)) == []

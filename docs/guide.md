@@ -706,6 +706,15 @@ Once a domain is declared:
 - **Display:** peer links are drawn in purple and marked `⇋ peer` in the
   inspector. The domain's frame says `MLAG`.
 
+`bytesim --demo mlag` stacks this seven tiers deep: a gateway, a clustered
+router pair, then spine, aggregation, leaf and rack switches and computers in
+two pods. Spine, aggregation and leaf are MLAG pairs, each rack switch is
+dual-homed to its leaf pair, and every span between tiers is one bundle
+(back-to-back MLAG, like double-sided vPC), so nothing is blocked.
+Try `mlags`, `lags`, `ping c1 c8`, then fail a switch at any tier (`fail s1`,
+`fail s3`, `fail s7`) or a router (`fail r1`), and run `mping all all *`
+again: every rack stays reachable.
+
 **Failover:** failing a forwarding cable makes STP unblock a backup port
 (`STP s7:p2 blocking → forwarding`), and traffic reroutes through it.
 
@@ -952,7 +961,7 @@ them, and a group name on its own selects the group.
 | `renumber [auto] bfs\|dfs [root]`, `renumber off` | `rename` | renumber ids in traversal order |
 | `layout [layered\|tree\|circular\|grid\|compact\|compact-layered] [auto\|horizontal\|vertical]`, `layout list` | `auto`, `arrange` | layout and/or flow direction, in either order; no argument reuses current settings; `list` shows choices |
 | `list` | `ls` | devices, cables, groups |
-| `demo [basic\|ha\|loop\|core]` | | load a sample network |
+| `demo [basic\|ha\|loop\|core\|mlag]` | | load a sample network |
 | `save [file]`, `load [file]` | `open` | save files; `load` also reads topologies |
 | `export <file.yaml> [ports]` | | write a declarative topology |
 | `export script [readable\|shortest\|explicit] [file]` | | the commands that rebuild the network (verified) |

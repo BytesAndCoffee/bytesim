@@ -56,7 +56,7 @@ HELP = """\
 [b]Loops, STP, storms[/]  switches run spanning tree unless it's switched off for them
   [cyan]broadcast[/] <id\\[:port]>                 flood one frame; into a live loop it becomes a storm
   [cyan]lag[/] (find spans) · [cyan]lag auto[/] · [cyan]lag[/] <switch|domain> <switch|router|gateway|domain> · [cyan]unlag[/] … · [cyan]lags[/]
-  [cyan]mlag[/] <group…> · [cyan]unmlag[/] <group> · [cyan]mlags[/]   a group of switches acts as one (peer links needed), like vPC
+  [cyan]mlag[/] <group…> · [cyan]unmlag[/] <group> · [cyan]mlags[/] · [cyan]demo mlag[/]   a group of switches acts as one (peer links needed), like vPC
                                     bundle parallel cables into one link (no STP blocking, flows spread)
   [cyan]stp[/]  ·  [cyan]stp[/] on|off  ·  [cyan]stp[/] <switch…> on|off  ·  [cyan]stp priority[/] <switch> <n>  ·  [cyan]demo loop[/]
 [b]Roles, failures, HA[/]
