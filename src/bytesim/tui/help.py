@@ -11,7 +11,10 @@ HELP = """\
   [cyan]ports[/] <id…> <n>                 change port / NIC count, e.g. [i]ports s4 s6 8[/]
   [cyan]mesh[/] A B · [cyan]zip[/] A B · [cyan]parallel[/] a b n · [cyan]chain[/] x… · [cyan]ring[/] x…   cabling patterns
                                     A name is a device, a group or a,b,c, e.g. [i]mesh fab1 g1,g2,r2[/], [i]ring fab1[/]
-  [cyan]ping[/] <id> <id|addr|internet>    echo request + reply (follows networks + gateways)
+  [cyan]ping[/] <id> <id|addr|internet|group|all> \\[dest…]   echo request + reply; several receivers = multicast
+  [cyan]mping[/] <src|all> <ids|groups|all> \\[*]  shared requests + replies; [i]mping all all *[/] includes routers/gateways
+                                    also [cyan]mcast ping[/]; large batches summarize per sender
+                                    bare device targets choose fewest hops, then lowest port; [cyan]r1:p2[/] selects an interface
   [cyan]unicast[/] <src> <id|addr>         one-way packet to a single device
   [cyan]multicast[/] <src> <ids|groups|all> one packet, copied where paths split, e.g. [i]mcast c1 pcs c8[/]
   [cyan]group[/] <name> <id|group ...>      logical layer; groups nest, e.g. [i]group dc1 fab1 rfab1[/]

@@ -14,13 +14,16 @@ def mode_text(ifc: Iface) -> str:
 
 
 def render_inspector(net: Network, sel: str | None, selected_group: str | None,
-                     graph: bool, auto: bool, naming: str = "off", traffic=None) -> str:
+                     graph: bool, auto: bool, naming: str = "off", traffic=None,
+                     preparing: bool = False) -> str:
     out = [f"mode: [b]{'graph' if graph else 'addr'}[/]  ·  auto-arrange: "
            f"{'[green]on[/]' if auto else '[yellow]off[/]'}",
            f"layout: [cyan]{net.layout_mode}[/]",
            f"orientation: [cyan]{net.group_orientation}[/]",
            f"auto-renumber: {'[dim]off[/]' if naming == 'off' else f'[cyan]{naming}[/]'}",
            f"{len(net.devices)} devices · {len(net.links)} cables", ""]
+    if preparing:
+        out.insert(3, "[yellow]preparing packet batch…[/]")
     if traffic is not None:
         st = traffic.stats
         out.insert(-1, f"traffic [green]on[/] {traffic.rate:g}/s · {st.delivered} delivered · "

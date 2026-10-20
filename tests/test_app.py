@@ -35,6 +35,28 @@ def test_demo_ping_and_multicast_complete():
     assert "✗" not in text
 
 
+def test_multicast_ping_completes_all_reply_animations():
+    async def go():
+        app = ByteSimApp()
+        async with app.run_test(size=(170, 60)) as pilot:
+            app.run_command("demo ha")
+            app.run_command("layout compact-layered")
+            app.run_command("mping c1 c2 c6")
+            assert app.canvas.packets
+            # Advance the real animation engine without wall-clock delays.
+            for _ in range(10000):
+                if not app.canvas.busy:
+                    break
+                app.canvas._tick()
+            await pilot.pause()
+            assert not app.canvas.busy and not app.canvas.hot_links
+            return " ".join(l.text for l in app.query_one("#log").lines)
+
+    text = asyncio.run(go())
+    assert "reply from c2" in text and "reply from c6" in text
+    assert "multicast ping: 2/2 replies, 0 failed" in text and "✗" not in text
+
+
 def test_errors_are_reported_not_raised():
     app, log = asyncio.run(_session(["frobnicate", "r1 s1", "ping c1 c2"]))
     assert sum("✗" in line for line in log) == 3

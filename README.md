@@ -49,7 +49,10 @@ forwarding, failure) and leaves out the detail that gets in the way:
 - **Random traffic** with per-cable load shading and statistics (drops, busiest
   cables, top talkers), reproducible with a seed.
 - **Unicast, ping and multicast.** With multicast you can see the packet copied
-  wherever the paths split.
+  wherever the paths split. `mping` sends a shared request and collects replies
+  from individual receivers. Large batches stay interactive and summarize per
+  sender. `mping all all *` includes addressed routers and gateways alongside
+  computers.
 - **Animation speed.** Slow packets down or speed them up with `speed`.
 - **Cable roles** (data, control, fabric) and failures you can trigger by hand.
 - **Multipath**: flow-hashed ECMP across equal-cost routes, link aggregation

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import random
 import time
+from collections.abc import Iterator
 from math import isfinite
 
 from rich.markup import escape
@@ -18,6 +19,7 @@ from .registry import command
 class TrafficCommands(CommandHost):
     INTERNET = ("internet", "inet", "wan")
     SPEEDS = {"slow": 0.5, "normal": 1.0, "fast": 3.0}
+    BULK_PAIRS = 128
 
     @command("speed")
     def cmd_speed(self, args: list[str], opts: dict[str, str]) -> None:
@@ -35,7 +37,6 @@ class TrafficCommands(CommandHost):
             self.animation_speed = speed
         self.log_msg(f"animation speed: [b]{self.animation_speed:g}x[/]"
                      " · slow=0.5x · normal=1x · fast=3x")
-
 
     @staticmethod
     def _flatten(legs: list[Leg]) -> list[tuple[str, int]]:
@@ -74,7 +75,9 @@ class TrafficCommands(CommandHost):
         dev = net.get(did)
         if dev.kind == "s":
             raise NetError(f"{did} is a switch (layer 2): it has no address to reach")
-        if port:
+        if port is not None:
+            if not 1 <= port <= dev.nports:
+                raise NetError(f"{did} has no port {port} (it has {dev.nports})")
             if not net.iface(did, port).addr:
                 raise NetError(f"{did}:{dev.port_name(port)} has no address")
             return f"{did}:{dev.port_name(port)}", [(did, port)]
@@ -159,6 +162,8 @@ class TrafficCommands(CommandHost):
 
     def _log_route(self, kind: str, color: str, src: str, label: str,
                    path: list[tuple[str, int]], legs: list[Leg] | None, internet: bool) -> None:
+        if not self._show_detail():
+            return
         net = self.net
         chain = " → ".join(f"[{net.devices[d].color}]{d}[/]" for d, _ in path)
         if internet:
@@ -182,8 +187,12 @@ class TrafficCommands(CommandHost):
 
     @command("ping", "trace", "tracert", "traceroute")
     def cmd_ping(self, args: list[str], opts: dict[str, str]) -> None:
+        if len(args) >= 2 and (args[0].lower() in ("all", "*") or len(args) > 2 or args[1].lower() in ("all", "*")
+                               or args[1].lower() in self.net.groups):
+            self.cmd_mping(args, opts)
+            return
         if len(args) != 2:
-            raise NetError("usage: ping <src> <id|(net,host)|internet>")
+            raise NetError("usage: ping <src> <id|(net,host)|internet|group|all> [...]")
         src = self._src(args[0])
         if args[1].lower() not in self.INTERNET and self._ref_or_none(args[1]) == src:
             self.log_msg(f"{src}: reply from self (loopback)")
@@ -211,8 +220,9 @@ class TrafficCommands(CommandHost):
         def replied() -> None:
             c.cool(links)
             c.flash_device(src, "green")
-            self.log_msg(f"  [green]reply from {label}[/]: hops={len(path) - 1} "
-                         f"ttl={ttl} time={rtt:.2f} ms")
+            metrics = (f": hops={len(path) - 1} ttl={ttl} time={rtt:.2f} ms"
+                       if self._show_detail() else "")
+            self.log_msg(f"  [green]reply from {label}[/]{metrics}")
             self.refresh_sidebar()
 
         c.send_packet(self._cells(path), "red", arrived)
@@ -261,54 +271,144 @@ class TrafficCommands(CommandHost):
         def delivered() -> None:
             c.cool(links)
             c.flash_device(path[-1][0], "#ffaf00")
-            self.log_msg(f"  [#ffaf00]delivered to {label}[/]: {len(path) - 1} hops, "
-                         f"{routers} router{'s' if routers != 1 else ''}")
+            metrics = (f": {len(path) - 1} hops, {routers} router{'s' if routers != 1 else ''}"
+                       if self._show_detail() else "")
+            self.log_msg(f"  [#ffaf00]delivered to {label}[/]{metrics}")
             self.refresh_sidebar()
 
         c.send_packet(self._cells(path), "#ffaf00", delivered)
 
-    def _targets(self, toks: list[str]) -> list[str]:
-        """Expand device ids, addresses and group names into a list of device ids."""
+    def _participants(self, whole_network: bool = False) -> list[str]:
+        """Default: computers. Whole network: addressed devices, or every graph node.
+
+        Keep configured failed devices so failures are measured rather than hidden.
+        """
+        devices = self.net.sorted_devices()
+        if not whole_network:
+            return [d.id for d in devices if d.kind == "c"]
+        return [d.id for d in devices if self.graph or (d.kind != "s" and self.net.addressed(d.id))]
+
+    def _targets(self, toks: list[str], whole_network: bool = False) -> list[str]:
+        """Expand targets, retaining explicit interface/address selection."""
         out: list[str] = []
         for t in toks:
             if t.lower() in ("all", "*"):
-                ids = [d.id for d in self.net.sorted_devices() if d.kind == "c"]
+                ids = self._participants(whole_network)
             elif t.lower() in self.net.groups:
                 ids = [d for d in self.net.devices_in(t.lower())
                        if self.graph or self.net.devices[d].kind != "s"]   # switches can't receive
             elif ADDR.match(t) and not self.graph:
-                ids = [self._resolve_dst(t)[1][0][0]]  # type: ignore[index]
+                did, port = self._resolve_dst(t)[1][0]  # type: ignore[index]
+                ids = [f"{did}:{port}"]
             else:
-                ids = [self.net.get(self._ref(t)[0]).id]
+                did, port = self._ref(t)
+                self.net.get(did)
+                ids = [f"{did}:{port}" if port is not None else did]
             out.extend(i for i in ids if i not in out)
         return out
 
     @command("multicast", "mcast")
     def cmd_multicast(self, args: list[str], opts: dict[str, str]) -> None:
         """One packet, copied only where the paths to the receivers split."""
+        if args and args[0].lower() == "ping":
+            self.cmd_mping(args[1:], opts)
+            return
+        self._multicast(args)
+
+    def _show_detail(self, bulk: bool = False) -> bool:
+        return not bulk
+
+    @command("mping", "mcastping", "multicast-ping")
+    def cmd_mping(self, args: list[str], opts: dict[str, str]) -> None:
+        """A shared multicast echo request, with a routed reply from each receiver."""
+        # A third/trailing '*' widens all selectors. Keep the two-argument
+        # forms (mping c1 * / mping * *) as their existing computer shortcuts.
+        whole_network = len(args) >= 3 and args[-1] == "*"
+        if whole_network:
+            args = args[:-1]
+        if len(args) >= 2 and args[0].lower() in ("all", "*"):
+            sources = self._participants(whole_network)
+            if not sources:
+                kind = "pingable devices" if whole_network else "computers"
+                raise NetError(f"no {kind} to send multicast ping")
+            targets = self._targets(args[1:], whole_network)
+            sources = [src for src in sources if any(self._ref(dst)[0] != src for dst in targets)]
+            if not sources:
+                raise NetError("no receivers (the source can't send to itself)")
+            pairs = sum(self._ref(dst)[0] != src for src in sources for dst in targets)
+            bulk = pairs >= self.BULK_PAIRS
+            self.log_msg(f"[b bright_magenta]MULTICAST PING FROM ALL[/]: {len(sources)} senders · {pairs} requests"
+                         + (" · whole network" if whole_network else "")
+                         + (" · summaries" if not self._show_detail(bulk) else ""))
+
+            def batch():
+                for src in sources:
+                    yield from self._multicast_steps(src, [d for d in targets if self._ref(d)[0] != src], True, bulk)
+
+            self._prepare_multicast(batch(), pairs)
+            return
+        self._multicast(args, echo=True, whole_network=whole_network)
+
+    def _prepare_multicast(self, steps: Iterator[None], pairs: int) -> None:
+        if pairs >= self.BULK_PAIRS and not self.headless and not self.replaying:
+            self.log_msg(f"[dim]preparing {pairs} requests; playback starts together when ready[/]")
+            self.canvas.prepare(steps)
+        else:
+            for _ in steps:
+                pass
+
+    def _multicast(self, args: list[str], echo: bool = False, whole_network: bool = False) -> None:
         if len(args) < 2:
-            raise NetError("usage: multicast <src> <id|(net,host)|group|all> [...]")
-        net = self.net
+            source = "src|all" if echo else "src"
+            raise NetError(f"usage: {'mping' if echo else 'multicast'} <{source}> <id|(net,host)|group|all> [...]")
         src = self._src(args[0])
-        receivers = [d for d in self._targets(args[1:]) if d != src]
+        receivers = [d for d in self._targets(args[1:], whole_network) if self._ref(d)[0] != src]
         if not receivers:
             raise NetError("no receivers (the source can't send to itself)")
+        bulk = len(receivers) >= self.BULK_PAIRS
+        self._prepare_multicast(self._multicast_steps(src, receivers, echo, bulk), len(receivers))
+
+    def _multicast_steps(self, src: str, receivers: list[str], echo: bool, bulk: bool) -> Iterator[None]:
+        """Yield between route queries and packet creation so large batches stay interactive."""
+        def detailed() -> bool:
+            return self._show_detail(bulk)
+
+        net = self.net
         paths: dict[str, list[tuple[str, int]]] = {}
+        reply_targets: dict[str, str] = {}
+        endpoints: dict[str, tuple[tuple[str, int], tuple[str, int]]] = {}
         lost: list[str] = []
         for d in receivers:
             try:
                 _, path, legs, _ = self._plan(src, d)
             except NetError as e:
                 lost.append(f"{d} ({e})")
+                yield
                 continue
             self._learn(legs)
             paths[d] = path
-        recv_txt = " ".join(f"[{net.devices[d].color}]{d}[/]" for d in receivers)
+            if legs:
+                endpoints[d] = legs[0][0], self._last_dst
+            # Reply to the interface that originated this receiver's request,
+            # which matters when the sender has NICs on several networks.
+            if echo:
+                reply_targets[d] = fmt(net.addr_of(legs[0][0])) if legs else src
+            yield
+        recv_txt = " ".join(f"[{net.devices[self._ref(d)[0]].color}]{d}[/]" for d in receivers)
         frm = src if self.graph else f"{fmt(next((i.addr for _, i in net.addressed(src)), None))} [dim]({src})[/]"
-        self.log_msg(f"[b bright_magenta]MULTICAST[/] {frm} → {recv_txt}")
-        for msg in lost:
+        kind = "MULTICAST PING" if echo else "MULTICAST"
+        if detailed():
+            self.log_msg(f"[b bright_magenta]{kind}[/] {frm} → {recv_txt}")
+            for target, (a, b) in endpoints.items():
+                self.log_msg(f"  [dim]request to {target}: {self._ifname(a)} {fmt(net.addr_of(a))}"
+                             f" → {self._ifname(b)} {fmt(net.addr_of(b))}[/]")
+        for msg in lost if detailed() else lost[:5]:
             self.log_msg(f"  [red]✗ unreachable: {escape(msg)}[/]")
+        if not detailed() and len(lost) > 5:
+            self.log_msg(f"  [red]{len(lost) - 5} more unreachable receivers · source {src}[/]")
         if not paths:
+            if echo:
+                self.log_msg(f"  [yellow]multicast ping: 0/{len(receivers)} replies, {len(lost)} failed[/] · source {src}")
             return
 
         # Links in the distribution tree, and where copies get made.
@@ -319,27 +419,71 @@ class TrafficCommands(CommandHost):
                 children.setdefault(u, set()).add(v)
         forks = [f"{u}×{len(vs)}" for u, vs in children.items() if len(vs) > 1]
         unicast_cost = sum(len(p) - 1 for p in paths.values())
-        self.log_msg(f"  copies made at: {' '.join(forks) or 'none (single path)'}")
-        self.log_msg(f"  {len(tree_links)} link transmissions "
-                     f"(separate unicasts would need {unicast_cost})")
+        if detailed():
+            self.log_msg(f"  copies made at: {' '.join(forks) or 'none (single path)'}")
+            self.log_msg(f"  {len(tree_links)} link transmissions "
+                         f"(separate unicasts would need {unicast_cost})")
 
         # All copies leave together and share cells until their paths split,
         # so on screen one packet visibly forks at each branching device.
         c = self.canvas
         c.heat(tree_links)
         pending = [len(paths)]
+        replies: list[str] = []
+        reply_failures: list[str] = []
 
-        def arrived(dst: str) -> None:
-            c.flash_device(dst, "bright_magenta")
+        def finished() -> None:
             pending[0] -= 1
             if pending[0] == 0:
                 c.cool(tree_links)
-                self.log_msg(f"  [bright_magenta]delivered to {len(paths)} receiver{'s' if len(paths) != 1 else ''}[/]: "
-                             + " ".join(paths))
+                if echo:
+                    failed = len(lost) + len(reply_failures)
+                    color = "yellow" if failed else "green"
+                    self.log_msg(f"  [{color}]multicast ping: {len(replies)}/{len(receivers)} replies, {failed} failed[/]"
+                                 f" · source {src}")
+                else:
+                    names = ": " + " ".join(paths) if detailed() else ""
+                    self.log_msg(f"  [bright_magenta]delivered to {len(paths)} receiver{'s' if len(paths) != 1 else ''}[/]{names}")
                 self.refresh_sidebar()
+
+        def arrived(dst: str) -> None:
+            dst_id = self._ref(dst)[0]
+            c.flash_device(dst_id, "bright_magenta")
+            if not echo:
+                finished()
+                return
+            try:
+                net.get(dst_id)
+                net.get(src)
+                _, back, legs, _ = self._plan(dst_id, reply_targets[dst])
+            except NetError as e:
+                reply_failures.append(dst)
+                if detailed() or len(reply_failures) <= 5:
+                    self.log_msg(f"  [red]✗ no reply from {dst} to {src}: {escape(str(e))}[/]")
+                finished()
+                return
+            self._learn(legs)
+            if detailed():
+                self._log_route("ECHO REPLY", "green", dst_id, src, back, legs, False)
+            links = [li for _, li in back[1:]]
+            c.heat(links)
+            ttl = 64 - self._routers_in(back, legs)
+            rtt = sum(random.uniform(0.15, 0.6) for _ in paths[dst] + back)
+
+            def replied() -> None:
+                c.cool(links)
+                c.flash_device(src, "green")
+                replies.append(dst)
+                if detailed():
+                    self.log_msg(f"  [green]reply from {dst}[/] to {src}: hops={len(back) - 1} "
+                                 f"ttl={ttl} time={rtt:.2f} ms")
+                finished()
+
+            c.send_packet(self._cells(back), "green", replied)
 
         for dst, p in paths.items():
             c.send_packet(self._cells(p), "bright_magenta", lambda d=dst: arrived(d))
+            yield
 
     # ---- random background traffic --------------------------------------------
     TRAFFIC_COLORS = {"unicast": "#87d7ff", "internet": "#d7afff", "broadcast": "#ffff87"}
@@ -422,7 +566,7 @@ class TrafficCommands(CommandHost):
     def traffic_step(self, dt: float) -> int:
         """Advance the traffic by dt seconds; returns how many packets were sent."""
         gen = self.traffic
-        if gen is None or (self.replaying and not self.headless):   # paused while the app runs a script
+        if gen is None or (self.replaying and not self.headless):
             return 0
         gen.cool(dt)
         n = gen.due(dt)

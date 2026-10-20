@@ -30,9 +30,22 @@ First release.
   with ARP shown for each hop and MAC learning on switches.
 - Ping, unicast and multicast with packet animation; graph mode for pure
   connectivity.
+- Multicast ping (`mping`, `mcast ping`, or `ping` with groups / `all` / several
+  destinations): a shared request, independently routed replies, per-receiver
+  failures and a reply summary, in address and graph modes.
 - Adjustable packet animation (`speed slow|normal|fast|<multiplier>`): a shared
   pace scales to long paths while preserving multicast branching. Normal speed
   targets about 1.5 seconds per longest active one-way path.
+- `mping all <target>` sends from every computer; `mping all all` tests all
+  distinct computer pairs. Replies and summaries identify the originating sender.
+- `mping all all *` includes every addressed computer, router and gateway (all
+  nodes in graph mode), excluding self-pings and retaining configured failures.
+  Explicit interface/address targets survive multicast expansion; detailed logs
+  show selected endpoints, with deterministic shortest-route/lowest-port selection.
+- Large multicast batches prepare and process arrivals in bounded work slices,
+  with simultaneous request starts and per-sender summaries. Network/layout edits cancel obsolete packet work.
+  Scoped port/adjacency indexes, per-route query caches, reused cable geometry
+  and linear-time packet completion reduce all-to-all overhead.
 - Cable roles (data, control, fabric) and failure injection.
 - HA router clusters: virtual gateways, failover, split-brain detection,
   quorum and witness policies.
@@ -74,5 +87,3 @@ First release.
   `lag auto`, and clones of groups that contain MLAG domains (a 48-device MLAG fabric went
   from 168 to 80 commands).
 - JSON save and load; a `bytesim` command with `--demo` and `--run`.
-- Scoped port/adjacency indexes, per-route query caches and reused cable
-  geometry reduce routing overhead on large fabrics.

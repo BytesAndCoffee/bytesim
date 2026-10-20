@@ -1,7 +1,9 @@
 """The network canvas: draws devices, cables, frames and packets; mouse and keys."""
 from __future__ import annotations
 
-from collections import Counter
+import time
+from collections import Counter, deque
+from collections.abc import Iterator
 from dataclasses import dataclass
 from typing import Callable
 
@@ -28,6 +30,7 @@ ANIMATION_FPS = 60
 PACKET_FRAMES = 90       # normal speed: longest active path takes about 1.5 seconds
 EFFECT_FPS = 45          # retain existing cell speed and blink/storm timing
 FLASH_FRAMES = 40        # two-thirds of a second
+WORK_SECONDS = 0.006     # yield routing/callback bursts back to Textual after each slice
 
 
 class NetCanvas(Widget, can_focus=True):
@@ -62,6 +65,10 @@ class NetCanvas(Widget, can_focus=True):
         self.show_addr = True
         self.pan = (0, 0)
         self.packets: list[Packet] = []
+        self._preparing: deque[Iterator[None]] = deque()
+        self._callbacks: deque[Callable[[], None]] = deque()
+        self._work_scheduled = False
+        self._packet_state: tuple | None = None
         self._geom: tuple | None = None          # (layout key, cable geometry)
         self.hot_links: Counter[int] = Counter()
         self.flash: dict[str, list] = {}   # device -> [colour, ticks left]
@@ -72,15 +79,44 @@ class NetCanvas(Widget, can_focus=True):
     def reset(self) -> None:
         """Forget selection and anything in flight (the network was replaced)."""
         self.selected = self.selected_group = None
+        self.cancel_packets()
+        self.pan = (0, 0)
+
+    def cancel_packets(self) -> None:
+        """Discard work whose paths may no longer match the edited network."""
+        # Generators hold no contexts across yields. Dropping them also works
+        # when a currently executing query discovers a storm and calls changed().
+        self._preparing.clear()
+        self._callbacks.clear()
         self.packets.clear()
         self.flash.clear()
         self.hot_links.clear()
-        self.pan = (0, 0)
+        self._packet_state = None
+
+    def _state(self) -> tuple:
+        return self.net.to_json(), frozenset(self.net.storming), self.app.graph  # type: ignore[attr-defined]
+
+    def cancel_if_changed(self) -> bool:
+        if self.busy and self._packet_state != self._state():
+            self.cancel_packets()
+            return True
+        return False
+
+    @property
+    def preparing(self) -> bool:
+        return bool(self._preparing)
+
+    def prepare(self, steps: Iterator[None]) -> None:
+        if not self.busy:
+            self._packet_state = self._state()
+        self._preparing.append(steps)
+        self.animate()
+        self.app.refresh_sidebar()  # type: ignore[attr-defined]
 
     @property
     def busy(self) -> bool:
-        """True while packets are animating."""
-        return bool(self.packets)
+        """True until preparation, playback, and all completion callbacks finish."""
+        return bool(self.packets or self._preparing or self._callbacks)
 
     @property
     def net(self) -> Network:
@@ -250,6 +286,8 @@ class NetCanvas(Widget, can_focus=True):
     # ---- packets -------------------------------------------------------
     def send_packet(self, cells: list[tuple[int, int]], color: str,
                     on_done: Callable[[], None] | None = None) -> None:
+        if not self.busy:
+            self._packet_state = self._state()
         self.packets.append(Packet(cells, color, on_done))
         self.animate()
 
@@ -267,25 +305,59 @@ class NetCanvas(Widget, can_focus=True):
 
     def animate(self) -> None:
         """Make sure the animation clock is running (it stops itself when idle)."""
+        self._schedule_work()
         if self._timer is None:
             self._timer = self.set_interval(1 / ANIMATION_FPS, self._tick)
 
+    def _schedule_work(self) -> None:
+        if (self._preparing or self._callbacks) and not self._work_scheduled:
+            self._work_scheduled = True
+            # A positive timer delay yields the event loop even when Textual's
+            # message queue is continually refilled by this batch.
+            self.set_timer(0.001, self._work)
+
+    def _work(self) -> None:
+        self._work_scheduled = False
+        self._drain_work()
+
+    def _drain_work(self) -> None:
+        """Run one bounded slice, then let input, drawing and timers run."""
+        deadline = time.perf_counter() + WORK_SECONDS
+        preparing = self.preparing
+        while (self._preparing or self._callbacks) and time.perf_counter() < deadline:
+            if self._preparing:
+                steps = self._preparing[0]
+                try:
+                    next(steps)
+                except StopIteration:
+                    if self._preparing and self._preparing[0] is steps:
+                        self._preparing.popleft()
+            else:
+                self._callbacks.popleft()()
+        if preparing and not self.preparing:
+            self.app.refresh_sidebar()  # type: ignore[attr-defined]
+        self._schedule_work()
+
     def _tick(self) -> None:
+        if self._preparing:
+            # Hold playback while building the batch: every initial request
+            # still starts at pos=0 together, even across several commands.
+            self._drain_work()
+            return
         packets = list(self.packets)
         longest = max((len(pk.cells) + TRAIL for pk in packets), default=0)
         step = max(EFFECT_FPS / ANIMATION_FPS, (longest + 1) / PACKET_FRAMES) * self.app.animation_speed  # type: ignore[attr-defined]
         # A common pace keeps multicast copies on the same cells until they
         # branch. Scale by path length so a large layout doesn't mean a long wait.
-        self.packets, done = [], []
+        self.packets = []
         for pk in packets:
             pk.pos += step
             if pk.pos - TRAIL >= len(pk.cells):
                 if pk.on_done:
-                    done.append(pk.on_done)
+                    self._callbacks.append(pk.on_done)
             else:
                 self.packets.append(pk)
-        for on_done in done:       # after the sweep: a callback may send the next packet
-            on_done()
+        self._drain_work()
         for dev_id in list(self.flash):
             self.flash[dev_id][1] -= 1
             if self.flash[dev_id][1] <= 0:

@@ -376,12 +376,20 @@ tables.
 ping c1 c8                 echo request (red) and reply (green)
 ping c4 (1,1)              destinations can be addresses
 ping c1 internet           via the nearest gateway
+mping c1 c4 c6 c8          multicast request (magenta), individual replies (green)
+mping all c1               every other computer pings c1
+mping all all              every computer pings every other computer
+mping all all *            every ping-capable device pings every other one
+mping all c1 *             routers, gateways and computers each ping c1
+mping c1 r1:p2             probe a specific router interface
+ping c1 all                multicast ping to every other computer
+ping c1 office             multicast ping to members of a group
 unicast c2 c7              one-way packet (orange)
 mcast c1 c4 c6 c8          one packet, copied where the paths split (magenta)
 mcast c1 pcs all           receivers can be group names or `all` (every computer)
 ```
 
-Each send logs the address path, an ARP line for every hop (`ARP (3,1) is-at
+Detailed sends log the address path, an ARP line for every hop (`ARP (3,1) is-at
 R1C`) and the TTL. Multicast also reports where copies were made and how many
 cable crossings it took, compared with sending a separate unicast to each
 receiver. A device blinks when a packet arrives, and the cables in use stay
@@ -402,6 +410,56 @@ speed             show the current speed
 Changes apply to packets already in flight. Speed is a session preference,
 retained when loading or clearing a network. It controls animation timing;
 `traffic rate` still controls how many background packets are generated.
+
+`mping <src> <receivers…>` sends one multicast echo request and collects a
+separate reply from each receiver. `ping` chooses this behavior when given
+multiple destinations, a group, `all`, or `*`. You can also write
+`mcast ping c1 c4 c6` (`multicast-ping` and `mcastping` are aliases for `mping`).
+Nested groups expand to their members, duplicate targets are removed, and the
+sender is excluded. `all` as a target means every other computer. `all` as a
+source starts one multicast ping from each computer that has another receiver;
+`mping all all` checks every ordered pair of distinct computers. Replies and
+summaries identify their sender so concurrent results can be distinguished.
+
+Append `*` after the destinations to expand `all` on both sides to every
+ping-capable device: `mping all all *`. In address mode, eligible devices are
+computers, routers and gateways with at least one assigned address. ByteSim's
+switches have no management address and remain excluded. Unaddressed devices
+are ineligible; configured devices that are down or unreachable still participate
+and produce failures. Each device excludes itself, including its other interfaces.
+Wildcards select each device once, so 60 eligible devices produce 3,540 ordered
+pairs. In graph mode, every device is eligible, including switches and unaddressed
+nodes, and pings test physical paths rather than IP reachability. The existing
+two-argument forms `mping c1 *` and `mping * *` retain their computer-only selection.
+
+A bare device target probes one of its addressed interfaces using the route with
+the fewest cable hops; equal-length routes choose the lowest numbered destination
+port. Use an interface such as `r1:p2` or an address such as `(3,1)` to select the
+target explicitly. Multicast preserves that selection and deduplicates equivalent
+address/port targets. With detailed output, each request shows its originating
+interface/address and selected destination interface/address. A router's selected
+address can be reached through another interface on that router; the destination
+address and physical ingress port need not be the same.
+
+Batches of 128 or more source/receiver pairs prepare routes in short slices
+while the UI remains responsive. Requests wait at position zero until the whole
+batch is ready, then leave together. Return-route calculations also yield between
+small batches of arrivals. Editing the network, layout or simulation mode cancels prepared and
+in-flight packets so their paths cannot reference an older topology.
+
+Large batches default to one reply/failure summary per sender instead of logging
+every packet and ARP. All pairs still run, with real return routes and MAC
+learning. Summaries count every failure; summary mode shows at most five
+individual request errors and five return-route errors per sender.
+
+The request shares cables until its paths split, just like ordinary multicast.
+Each receiver routes its own reply back to the sender's originating interface
+when the request arrives, so a request can arrive even if the reply has no
+return route. Detailed output reports each reply's hops, TTL and simulated time,
+plus a summary such as `multicast ping: 2/3 replies, 1 failed`. Unreachable
+receivers and failed return routes are reported individually in detailed mode; other receivers
+still reply. This also works in graph mode, using physical paths. A single
+device or internet destination with ordinary `ping` keeps its existing behavior.
 
 ## Random traffic
 
@@ -765,7 +823,8 @@ them, and a group name on its own selects the group.
 | `ip [id[:port]] [addr [gw] \| dhcp \| adhoc \| none]` | | show or set addresses |
 | `dhcp`, `release`, `adhoc <id[:nic]\|all>` | | client address control |
 | `dhcpd <router> [on\|off]` | | router DHCP server |
-| `ping <src> <dst>` | `trace`, `traceroute` | echo and reply |
+| `ping <src> <dst…>` | `trace`, `tracert`, `traceroute` | echo and reply; groups, `all` or several destinations use multicast |
+| `mping <src\|all> <id\|addr\|group\|all> … [*]` | `mcastping`, `multicast-ping` | shared echo requests and replies; trailing `*` expands eligibility |
 | `unicast <src> <dst>` | `ucast`, `send` | one-way packet |
 | `multicast <src> <dst…>` | `mcast` | one-to-many packet |
 | `mode graph\|addr` | | graph or address mode |

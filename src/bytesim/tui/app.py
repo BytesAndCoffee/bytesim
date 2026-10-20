@@ -101,6 +101,7 @@ class ByteSimApp(TopologyCommands, GroupCommands, AddressCommands, TrafficComman
         self.changed()
 
     def manual_moved(self) -> None:
+        self.canvas.cancel_packets()
         if self.auto:
             self.auto = False
             self.log_msg("[dim]auto-arrange paused — press [b]a[/b] or type [b]auto[/b] to re-arrange[/]")
@@ -124,11 +125,14 @@ class ByteSimApp(TopologyCommands, GroupCommands, AddressCommands, TrafficComman
         if self.auto:
             self.net.auto_layout(self.canvas.size.width or 120, height=self.canvas.size.height or 40)
         c = self.canvas
+        if c.cancel_if_changed():
+            self.log_msg("[dim]in-flight packet work cancelled after network/layout change[/]")
         if c.selected not in self.net.devices:
             c.selected = None
         if c.selected_group not in self.net.groups:
             c.selected_group = None
-        c.hot_links.clear()
+        if not c.busy:
+            c.hot_links.clear()
         c.refresh()
         self.refresh_sidebar()
 
@@ -140,7 +144,8 @@ class ByteSimApp(TopologyCommands, GroupCommands, AddressCommands, TrafficComman
         c = self.canvas
         self.query_one("#info", Static).update(
             render_inspector(self.net, c.selected, c.selected_group, self.graph, self.auto,
-                             self.naming_text(), self.traffic))
+                             self.naming_text(), self.traffic,
+                             preparing=c.preparing))
 
     # ---- the command line ----------------------------------------------
     def on_input_submitted(self, event: Input.Submitted) -> None:

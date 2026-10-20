@@ -48,7 +48,7 @@ src/bytesim/
         ├── scripting.py export script, run
         ├── history.py   undo / redo (snapshot per changing command)
         ├── interpreter.py tokens + dispatch (shared by the app and ScriptRunner)
-        └── traffic.py   ping, unicast, multicast
+        └── traffic.py   ping, multicast ping, unicast, multicast
 ```
 
 ## The model
@@ -148,6 +148,29 @@ fractional positions make slower playback smooth. `speed` accepts slow (0.5x),
 normal (1x), fast (3x), or a numeric multiplier from 0.1 to 10.
 Multicast copies share cells until their paths split, so a single packet
 appears to fork.
+
+Small batches compute routes on dispatch. At 128 source/receiver pairs, multicast
+uses generators that yield between route queries and packet creation. The canvas
+drains preparation in 6 ms slices, scheduling each continuation with a positive
+timer delay to yield the event loop. Playback waits for preparation to finish,
+so every request in the batch starts at position zero together. Network/layout/mode edits cancel prepared
+and in-flight work; a snapshot comparison avoids cancelling on unchanged refreshes.
+
+Multicast ping uses the same request distribution as one-way multicast. On
+each arrival, it asks the model for a fresh return route to that request's
+source interface and starts a separate reply animation. Completion counts
+replies and failures, and releases the request and reply cable highlights.
+Completed packets are partitioned in linear time, with callbacks queued and
+drained under the same work budget. `busy` includes preparation and callback
+backlogs. Large batches default to per-source summaries; all simulation work still runs.
+The shared handlers also run with the headless `ScriptRunner`.
+
+`mping`'s trailing `*` modifier expands `all` selectors to addressed non-switch
+devices (all nodes in graph mode), retaining configured failed devices for failure
+accounting. Wildcards select devices once, while explicit address/port targets
+normalize to `device:port` so interface choices survive multicast expansion.
+Device-wide targets use the cheapest interface route, breaking ties by port
+number; detailed request logs expose the chosen source and destination addresses.
 
 ## Scripts and synthesis
 
