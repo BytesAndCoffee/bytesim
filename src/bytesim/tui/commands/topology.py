@@ -7,6 +7,7 @@ from ... import demos
 from ...constants import ALIASES, KINDS, REF, ROLES
 from ...model import Link, NetError, Network
 from ...model.macros import macro_pairs
+from ...model.layout import LAYOUT_CHOICES, LAYOUT_MODES, ORIENTATIONS
 from ...topology import dump_topology, load_topology, looks_like_topology
 from ..help import HELP
 from ..theme import ROLE_COLOR
@@ -175,6 +176,23 @@ class TopologyCommands(CommandHost):
 
     @command("auto", "arrange", "layout")
     def cmd_auto(self, args: list[str], opts: dict[str, str]) -> None:
+        args = [a.lower() for a in args]
+        if args == ["list"]:
+            self.log_msg(f"layout: [b]{self.net.layout_mode}[/] · available: {', '.join(LAYOUT_MODES)}"
+                         + f" · orientation: [b]{self.net.group_orientation}[/]"
+                         + f" · orientations: {', '.join(ORIENTATIONS)}")
+            return
+        fields = {value: field for field, choices in LAYOUT_CHOICES.items() for value in choices}
+        updates: dict[str, str] = {}
+        for arg in args:
+            field = fields.get(arg)
+            if field is None or field in updates:
+                raise NetError(f"usage: layout [{'|'.join(LAYOUT_MODES)}] [{'|'.join(ORIENTATIONS)}]"
+                               " (either order, at most one of each) · layout list")
+            updates[field] = arg
+        # Validate the whole command before changing either setting.
+        for field, value in updates.items():
+            setattr(self.net, field, value)
         self.arrange(announce=True)  # type: ignore[attr-defined]
 
     @command("list", "ls")

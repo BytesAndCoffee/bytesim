@@ -10,7 +10,7 @@ from .cloning import CloningMixin
 from .groups import GroupsMixin
 from .ha import HAMixin
 from .layer2 import Layer2Mixin
-from .layout import LayoutMixin
+from .layout import LAYOUT_CHOICES, LayoutMixin
 from .naming import NamingMixin
 from .routing import RoutingMixin
 from .stp import SpanningTreeMixin
@@ -102,10 +102,13 @@ class Network(GroupsMixin, Layer2Mixin, AddressingMixin, RoutingMixin, HAMixin, 
     # ---- persistence ---------------------------------------------------
     def to_json(self) -> str:
         return json.dumps({
+            "layout_mode": self.layout_mode,
+            "group_orientation": self.group_orientation,
             "counters": self.counters,
             "devices": [asdict(d) for d in self.devices.values()],
             "links": [asdict(l) for l in self.links],
             "groups": self.groups,
+            "group_layouts": self.group_layouts,
             "ifaces": {k: asdict(v) for k, v in self.ifaces.items()},
             "dhcp_off": sorted(self.dhcp_off),
             "clusters": self.clusters,
@@ -120,6 +123,12 @@ class Network(GroupsMixin, Layer2Mixin, AddressingMixin, RoutingMixin, HAMixin, 
     def from_json(cls, raw: str) -> "Network":
         data = json.loads(raw)
         net = cls()
+        for field, choices in LAYOUT_CHOICES.items():
+            value = data.get(field, getattr(net, field))
+            if value not in choices:
+                label = "layout" if field == "layout_mode" else "orientation"
+                raise NetError(f"{label} must be one of: {', '.join(choices)}")
+            setattr(net, field, value)
         net.counters.update(data["counters"])
         for d in data["devices"]:
             dev = Device(**d)
@@ -129,6 +138,9 @@ class Network(GroupsMixin, Layer2Mixin, AddressingMixin, RoutingMixin, HAMixin, 
         net.groups = {g: [d for d in ids if d in net.devices or d in names]
                       for g, ids in data.get("groups", {}).items()}
         net._drop_from_groups([])
+        for g, orientation in data.get("group_layouts", {}).items():
+            if g in net.groups:
+                net.set_group_layout(g, orientation)
         for k, v in data.get("ifaces", {}).items():
             if k.split(":")[0] in net.devices:
                 try:

@@ -39,7 +39,8 @@ forwarding, failure) and leaves out the detail that gets in the way:
   the device as `○` (free) or `●` (in use).
 - **Cabling by typing.** `r1 s2` connects two devices using their first free
   ports. `r1:3 s2:8` picks the ports.
-- **Automatic layout**, with arrow keys or the mouse to move things yourself.
+- **Selectable layouts:** layered, tree, circular, grid, compact and compact-layered,
+  with arrow keys or the mouse to move things yourself.
 - **Simple addressing.** An address is a pair: a network id and an 8-bit host
   number, like `(2,14)`. MAC addresses name the physical port: `R1A` is port 1
   of router r1.

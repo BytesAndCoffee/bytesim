@@ -145,6 +145,8 @@ class CloningMixin(NetworkBase):
                 self.clusters[new_g] = self.clusters[g]
             if g in self.cluster_modes:
                 self.cluster_modes[new_g] = self.cluster_modes[g]
+            if g in self.group_layouts:
+                self.group_layouts[new_g] = self.group_layouts[g]
             return new_g
 
         top = copy(name, new_name)

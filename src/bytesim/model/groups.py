@@ -3,12 +3,24 @@ from __future__ import annotations
 
 from ..constants import AUTO, BOX_H, GROUP_NAME, REF
 from .base import NetworkBase
+from .layout import ORIENTATIONS
 from .types import NetError
 
 
 class GroupsMixin(NetworkBase):
     # A group's members are device ids and/or other group names (never ambiguous:
     # group names can't look like device ids). Membership is a tree.
+
+    def set_group_layout(self, name: str, orientation: str) -> None:
+        """Orient the selected layout inside a group's frame."""
+        if name not in self.groups:
+            raise NetError(f"no such group: {name}")
+        if orientation not in ORIENTATIONS:
+            raise NetError("group layout must be auto, horizontal or vertical")
+        if orientation == "auto":
+            self.group_layouts.pop(name, None)
+        else:
+            self.group_layouts[name] = orientation
 
     def parent_of(self, member: str) -> str | None:
         return next((g for g, ms in self.groups.items() if member in ms), None)
@@ -101,6 +113,7 @@ class GroupsMixin(NetworkBase):
                 self.groups[parent][at:at + 1] = kids
             self.clusters.pop(name, None)
             self.cluster_modes.pop(name, None)
+            self.group_layouts.pop(name, None)
             self.mlag_domains.discard(name)
             self.lags = {p for p in self.lags if name not in p}
             self._drop_from_groups([])
@@ -127,6 +140,7 @@ class GroupsMixin(NetworkBase):
             gone = empty
         self.clusters = {c: pol for c, pol in self.clusters.items() if c in self.groups}
         self.cluster_modes = {c: m for c, m in self.cluster_modes.items() if c in self.clusters}
+        self.group_layouts = {g: m for g, m in self.group_layouts.items() if g in self.groups}
         gone = self.mlag_domains - set(self.groups)
         if gone:
             self.mlag_domains -= gone

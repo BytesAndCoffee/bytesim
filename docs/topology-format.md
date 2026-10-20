@@ -10,9 +10,9 @@ written and read by people. It's YAML (JSON also works).
 - `save` / `load` with JSON remain the complete snapshot (positions, addresses,
   failures). See [file-format.md](file-format.md).
 
-A topology deliberately leaves out runtime state: positions (the layout is
-recomputed), addresses (re-learned by DHCP and router autoconfiguration),
-failures and storms.
+A topology deliberately leaves out display settings (positions, layout mode,
+group orientations) and runtime state: addresses (re-learned by DHCP and router
+autoconfiguration), failures and storms.
 
 ## A complete example
 
