@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.3.2 (2026-10-20)
 
 - `demo mlag` (`bytesim --demo mlag`): a seven-tier data centre (edge gateway,
   clustered routers, then spine, aggregation, leaf and rack switches and
