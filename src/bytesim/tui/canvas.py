@@ -7,9 +7,11 @@ from collections.abc import Iterator
 from dataclasses import dataclass
 from typing import Callable
 
-from rich.text import Text
+from rich.segment import Segment
+from rich.style import Style
 from textual import events
 from textual.binding import Binding
+from textual.strip import Strip
 from textual.widget import Widget
 
 from ..constants import BOX_H
@@ -70,6 +72,10 @@ class NetCanvas(Widget, can_focus=True):
         self._work_scheduled = False
         self._packet_state: tuple | None = None
         self._geom: tuple | None = None          # (layout key, cable geometry)
+        self._grid: tuple | None = None          # (size, pan, chars, styles) of the current frame
+        self._strips: dict[tuple, Strip] = {}    # row runs -> Strip, reused while a row is unchanged
+        self._styles: dict[str, Style] = {}      # style string -> Style over the widget's base
+        self._base: Style | None = None
         self.hot_links: Counter[int] = Counter()
         self.flash: dict[str, list] = {}   # device -> [colour, ticks left]
         self._timer = None
@@ -375,17 +381,58 @@ class NetCanvas(Widget, can_focus=True):
     def _draw_order(self) -> list[Device]:
         return sorted(self.net.devices.values(), key=lambda d: d.id == self.selected)
 
-    def render(self) -> Text:
-        with self.net.remembering():
-            return self._draw()
+    def refresh(self, *args, **kwargs):
+        self._grid = None                        # every redraw request invalidates the frame
+        return super().refresh(*args, **kwargs)
+
+    def frame_grid(self) -> tuple[list[list[str]], list[list[str]]]:
+        """The current frame's characters and styles, drawn once per refresh."""
+        key = (self.size, self.pan)
+        if self._grid is None or self._grid[0] != key:
+            with self.net.remembering():
+                self._grid = (key, *self._draw())
+        return self._grid[1], self._grid[2]
+
+    def render_line(self, y: int) -> Strip:
+        """One screen row. Textual asks row by row; unchanged rows reuse their Strip."""
+        chars, styles = self.frame_grid()
+        base = self.rich_style                   # the widget's CSS colours, under every cell
+        if base != self._base:
+            self._base = base
+            self._styles.clear()
+            self._strips.clear()
+        if y >= len(chars):
+            return Strip.blank(self.size.width, base)
+        row, srow = chars[y], styles[y]
+        runs, start = [], 0
+        for col in range(1, len(row) + 1):
+            if col == len(row) or srow[col] != srow[start]:
+                runs.append(("".join(row[start:col]), srow[start]))
+                start = col
+        key = tuple(runs)
+        strip = self._strips.get(key)
+        if strip is None:
+            if len(self._strips) > 8 * max(1, len(chars)):
+                self._strips.clear()
+            strip = self._strips[key] = Strip(
+                [Segment(text, self._style(st)) for text, st in runs], len(row))
+        return strip
+
+    def _style(self, st: str) -> Style:
+        style = self._styles.get(st)
+        if style is None:
+            style = self._styles[st] = self._base + Style.parse(st) if st else self._base
+        return style
 
     def _geometry(self) -> tuple:
-        """Where every cable runs and the glyph mask of each cell: rebuilt only when the
-        layout, the cabling or what's blocked changes, not every animation frame."""
+        """Where every cable runs, the glyph mask of each cell and every group frame: rebuilt
+        only when the layout, the cabling, the groups or what's blocked changes, not every
+        animation frame."""
         net = self.net
         key = (tuple((d.id, d.x, d.y, d.width, d.nports) for d in net.devices.values()),
                tuple((l.a, l.pa, l.b, l.pb, l.role, l.up) for l in net.links),
-               frozenset(net.stp_blocked))
+               frozenset(net.stp_blocked),
+               tuple((g, tuple(ms)) for g, ms in net.groups.items()))
         if self._geom is not None and self._geom[0] == key:
             return self._geom[1]
         paths: list[list[tuple[int, int]]] = []
@@ -409,7 +456,10 @@ class NetCanvas(Widget, can_focus=True):
                 below = pt[1] > net.devices[dev_id].y
                 masks[pt] = masks.get(pt, 0) | (N if below else S)
                 sides[(dev_id, port)] = "bottom" if below else "top"
-        geom = (paths, masks, kinds, sides, broken)
+        bounds = {g: net.group_bounds(g) for g in net.groups}
+        frame_order = sorted(net.groups, key=lambda g: len(net.chain(g)))   # outer frames first
+        chains = {d: net.chain(d) for d in net.devices}
+        geom = (paths, masks, kinds, sides, broken, bounds, frame_order, chains)
         self._geom = (key, geom)
         return geom
 
@@ -417,7 +467,7 @@ class NetCanvas(Widget, can_focus=True):
         """Reuse rendered cable routes when constructing packet paths."""
         return self._geometry()[0]
 
-    def _draw(self) -> Text:
+    def _draw(self) -> tuple[list[list[str]], list[list[str]]]:
         w, h = self.size.width, self.size.height
         ox, oy = self.pan
         chars = [[" "] * w for _ in range(h)]
@@ -430,7 +480,7 @@ class NetCanvas(Widget, can_focus=True):
                 styles[sy][sx] = st
 
         net = self.net
-        paths, masks, kinds, sides, broken = self._geometry()
+        paths, masks, kinds, sides, broken, bounds, frame_order, chains = self._geometry()
         cell_style: dict[tuple[int, int], str] = {}
         hot = set(self.hot_links)
         if self.selected:
@@ -461,7 +511,7 @@ class NetCanvas(Widget, can_focus=True):
                 for pt in pts:
                     cell_style.setdefault(pt, st)
         frames = []
-        for g in sorted(net.groups, key=lambda g: len(net.chain(g))):   # outer frames first
+        for g in frame_order:
             sel = g == self.selected_group
             label = f" {g} "
             st = group_color(g)
@@ -473,7 +523,7 @@ class NetCanvas(Widget, can_focus=True):
                 if ha["level"] != "ok":
                     st = HA_COLOR[ha["level"]]
             st = "bold yellow" if sel else st
-            x0, y0, x1, y1 = net.group_bounds(g)
+            x0, y0, x1, y1 = bounds[g]
             frames.append((g, st, x0, y0, x1, label))
             hz, vt = ("━", "┃") if sel else ("┄", "┆")
             for x in range(x0 + 1, x1):
@@ -513,7 +563,7 @@ class NetCanvas(Widget, can_focus=True):
             # Labels wider than their box drop to a lower line instead of colliding.
             ends: dict[tuple[int, int], int] = {}
             for d in sorted(net.devices.values(), key=lambda d: d.x):
-                text, st, y = self._addr_label(d)
+                text, st, y = self._addr_label(d, bounds, chains[d.id])
                 if not text:
                     continue
                 step = 1 if d.kind == "c" else -1
@@ -537,18 +587,9 @@ class NetCanvas(Widget, can_focus=True):
                     x, y = pk.cells[idx]
                     put(x, y, "●" if k == 0 else "•", f"bold {pk.color}" if k == 0 else pk.color)
 
-        text = Text(no_wrap=True, overflow="crop")
-        for row in range(h):
-            start = 0
-            for col in range(1, w + 1):
-                if col == w or styles[row][col] != styles[row][start]:
-                    text.append("".join(chars[row][start:col]), styles[row][start] or None)
-                    start = col
-            if row < h - 1:
-                text.append("\n")
-        return text
+        return chars, styles
 
-    def _addr_label(self, d: Device) -> tuple[str, str, int]:
+    def _addr_label(self, d: Device, bounds: dict, chain: list[str]) -> tuple[str, str, int]:
         """Short address caption drawn under computers and above gateways."""
         net = self.net
         if d.kind == "g":
@@ -556,8 +597,8 @@ class NetCanvas(Widget, can_focus=True):
         if d.kind != "c" or self.app.graph:  # type: ignore[attr-defined]
             return "", "", 0
         y = d.y + BOX_H
-        for g in net.chain(d.id):                 # step below any frame edges under the box
-            bottom = net.group_bounds(g)[3]
+        for g in chain:                           # step below any frame edges under the box
+            bottom = bounds[g][3]
             if y <= bottom <= d.y + BOX_H + 3:
                 y = bottom + 1
         addrs = net.addressed(d.id)

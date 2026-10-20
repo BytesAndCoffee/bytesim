@@ -1,6 +1,7 @@
 """The ByteSim Textual app: layout, the command line, and keeping everything in sync."""
 from __future__ import annotations
 
+import gc
 from pathlib import Path
 
 from rich.markup import escape
@@ -92,6 +93,14 @@ class ByteSimApp(ConsoleCommands, TopologyCommands, GroupCommands, AddressComman
         for line in self._startup:
             self.call_after_refresh(self.run_command, line)
         self.refresh_sidebar()
+        self.call_after_refresh(self.settle_heap)
+
+    def settle_heap(self) -> None:
+        """Collect once, then exempt what survives (widgets, the network) from later
+        collections: full collections otherwise rescan it all and stall animation."""
+        gc.unfreeze()                        # release what an earlier network left behind
+        gc.collect()
+        gc.freeze()
 
     # ---- shared helpers (used by the canvas and the command mixins) ----
     def on_unmount(self) -> None:
@@ -133,6 +142,7 @@ class ByteSimApp(ConsoleCommands, TopologyCommands, GroupCommands, AddressComman
         self._ha_seen = {}
         self.canvas.reset()
         self.changed()
+        self.call_after_refresh(self.settle_heap)
 
     def changed(self, skip: frozenset[tuple[str, int]] = frozenset()) -> None:
         """Call after any structural change: re-address, renumber, report HA, re-layout, redraw."""
