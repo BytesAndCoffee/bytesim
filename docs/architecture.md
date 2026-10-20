@@ -10,7 +10,7 @@ src/bytesim/
 ├── __main__.py          python -m bytesim
 ├── cli.py               argument parsing, starts the app
 ├── constants.py         device kinds, sizes, token regexes, address constants
-├── demos.py             ready-made networks (basic, ha, loop)
+├── demos.py             ready-made networks (basic, ha, loop, core, mlag)
 ├── topology.py          the YAML topology format: load_topology(), dump_topology()
 ├── scripting.py         ScriptRunner / replay(): run command scripts headlessly
 ├── synthesis.py         export script: plan, find reuse, render, verify by replay

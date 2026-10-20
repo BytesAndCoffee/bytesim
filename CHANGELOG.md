@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+- `demo mlag` (`bytesim --demo mlag`): a seven-tier data centre (edge gateway,
+  clustered routers, then spine, aggregation, leaf and rack switches and
+  computers in two pods). Spine, aggregation and leaf are MLAG pairs, racks are
+  dual-homed to their leaf pair, and every span between tiers is one bundle.
+  Nothing is STP-blocked, and any single router, spine/aggregation/leaf switch
+  or uplink cable can fail without cutting off a rack; a rack switch remains
+  its own rack's single point of failure.
+
 ## 0.3.1 (2026-10-20)
 
 - Smoother animation on large topologies: the canvas renders line by line from a
