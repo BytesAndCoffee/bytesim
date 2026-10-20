@@ -7,6 +7,10 @@ First release.
 - Packet animation targets 60 fps, preserving normal playback duration, arrival
   flashes and storm effect timing.
 
+- Console tee (`tee <file>`, `tee`, `tee off`) and `--log-file`: append plain
+  UTF-8 console output, including later packet replies, while keeping it visible.
+  Logs close on exit; failed writes disable capture without interrupting simulation.
+
 - Gateways, routers, switches and computers with any number of ports or NICs;
   cabling by typing device ids.
 - Automatic layered layout; moving devices with the keyboard or mouse; panning.

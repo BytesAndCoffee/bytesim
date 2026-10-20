@@ -40,6 +40,7 @@ HELP = """\
   [cyan]speed[/] \\[slow|normal|fast|0.1..10]   60 fps packet animation (normal = 1x; no argument shows it)
   [cyan]pause[/] · [cyan]resume[/] ([cyan]play[/])          freeze playback, queue packet actions, then launch them together
   [cyan]queue[/] · [cyan]queue clear[/]               inspect or discard queued actions
+  [cyan]tee[/] <file> · [cyan]tee[/] · [cyan]tee off[/]        append console output to a plain text file; show status or stop
 [b]Addressing[/]  an address is (network, host): network id + 8-bit host, e.g. [i](2,14)[/]
   MACs name the physical port: R1A = r1 port 1. A network spans every switch it touches.
   Routers/gateways take host 1, 2… on each network and serve DHCP; computers lease hosts 10+,

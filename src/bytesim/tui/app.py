@@ -1,6 +1,8 @@
 """The ByteSim Textual app: layout, the command line, and keeping everything in sync."""
 from __future__ import annotations
 
+from pathlib import Path
+
 from rich.markup import escape
 from textual import events
 from textual.app import App, ComposeResult
@@ -13,6 +15,7 @@ from ..model import NetError, Network
 from .canvas import NetCanvas
 from .command_input import CommandInput
 from .commands.addressing import AddressCommands
+from .commands.console import ConsoleCommands
 from .commands.groups import GroupCommands
 from .commands.history import HistoryCommands
 from .commands.interpreter import Interpreter
@@ -25,7 +28,7 @@ from .commands.traffic import TrafficCommands
 from .inspector import render_inspector
 
 
-class ByteSimApp(TopologyCommands, GroupCommands, AddressCommands, TrafficCommands, NamingCommands,
+class ByteSimApp(ConsoleCommands, TopologyCommands, GroupCommands, AddressCommands, TrafficCommands, NamingCommands,
                  SwitchingCommands, ScriptCommands, HistoryCommands, Interpreter, App):
     """Canvas on the left, inspector on the right, console and command line below."""
 
@@ -43,15 +46,16 @@ class ByteSimApp(TopologyCommands, GroupCommands, AddressCommands, TrafficComman
     AUTO_FOCUS = "#cmd"
 
     def __init__(self, network: Network | None = None, startup: list[str] | None = None,
-                 auto: bool | None = None) -> None:
+                 auto: bool | None = None, log_file: str | Path | None = None) -> None:
         """``network`` starts the app on an existing model; ``startup`` commands run once mounted.
         ``auto`` turns auto-arrange on or off (default: on, unless a network with its own
-        positions is given)."""
+        positions is given). ``log_file`` appends console output from startup."""
         super().__init__()
         self.net = network or Network()
         self.auto = (network is None) if auto is None else auto
         self.graph = False              # graph-only mode: connectivity without addressing
         self._startup = startup or []
+        self._log_file = log_file
         self._ha_seen: dict = {}
         self._commands = collect(type(self))
 
@@ -72,6 +76,11 @@ class ByteSimApp(TopologyCommands, GroupCommands, AddressCommands, TrafficComman
         self.query_one("#canvas").border_title = "network"
         self.query_one("#side").border_title = "inspector"
         self.query_one("#log").border_title = "console"
+        if self._log_file is not None:
+            try:
+                self.cmd_tee([str(self._log_file)], {})
+            except NetError as e:
+                self.log_msg(f"[red]✗ {escape(str(e))}[/]")
         self.log_msg(f"[b]ByteSim {__version__}[/] — type [cyan]help[/] for commands, "
                      "or [cyan]demo[/] / [cyan]demo ha[/] for a sample network.")
         if self.net.devices:
@@ -81,10 +90,16 @@ class ByteSimApp(TopologyCommands, GroupCommands, AddressCommands, TrafficComman
         self.refresh_sidebar()
 
     # ---- shared helpers (used by the canvas and the command mixins) ----
+    def on_unmount(self) -> None:
+        self.close_console_log()
+
     def log_msg(self, msg: str) -> None:
         if self.replaying:                   # a script is running: keep the console quiet
             return
         self.query_one(RichLog).write(msg)
+        error = self.write_console_log(msg)
+        if error:
+            self.log_msg(f"[red]✗ {escape(error)}[/]")
 
     def action_focus_cmd(self) -> None:
         self.query_one(CommandInput).focus()

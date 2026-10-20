@@ -1,6 +1,7 @@
 # ByteSim user guide
 
 - [The screen](#the-screen)
+- [Console logging](#console-logging)
 - [Devices and ports](#devices-and-ports)
 - [Cabling](#cabling)
 - [Layout and moving things](#layout-and-moving-things)
@@ -37,6 +38,36 @@
 
 The command line has focus when ByteSim starts. `Esc` moves focus to the
 canvas, and `Enter` or `:` on the canvas moves it back.
+
+## Console logging
+
+Use `tee` to copy new console output to a file while keeping it visible:
+
+```text
+tee traffic.log              start appending to a file
+mping c1 c4 c6              capture its requests and replies
+tee                         show the active file (or off)
+tee off                     stop file logging
+```
+
+Files contain plain UTF-8 text without Rich colours or console wrapping. Each
+message is flushed so another terminal can follow it with `tail -f traffic.log`.
+Existing content is retained. Capture includes later packet replies and errors;
+it starts when enabled and does not copy earlier console history.
+
+Relative paths use ByteSim's working directory, `~` expands to your home
+directory, and paths with spaces may be quoted. `tee <another-file>` switches
+files. A failed open leaves the previous log active; a failed write disables
+the tee and reports an error in the console.
+
+To capture from startup, including the welcome message:
+
+```sh
+bytesim mynet.json --log-file traffic.log
+```
+
+The tee stays active across network loads, clears and undo/redo. It closes on
+exit and is session state, independent of saved networks.
 
 ## Devices and ports
 
@@ -862,6 +893,7 @@ them, and a group name on its own selects the group.
 | `speed [slow\|normal\|fast\|0.1..10]` | | set or show packet animation speed; normal is 1x |
 | `pause`, `resume` | `play`, `unpause` (resume) | freeze playback and queue packet commands, then start them together |
 | `queue [clear]` | | inspect queued actions or discard them |
+| `tee [file\|off]` | | append console output to a text file, show status, or stop capture |
 | `broadcast <id[:port]>` | `bcast`, `flood` | flood one frame (storms in a live loop) |
 | `lag`, `lag auto`, `lag <switch\|domain> <switch\|router\|gateway\|domain>`, `unlag …`, `lags` | | find and bundle aggregatable spans |
 | `mlag <group…>`, `unmlag <group>`, `mlags` | | make a group of switches act as one (needs peer links) |

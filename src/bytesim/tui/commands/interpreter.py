@@ -32,8 +32,12 @@ class Interpreter(CommandHost):
         if not toks:
             return
         original = list(toks)
-        opts = {k.lower(): v.lower() for k, _, v in (t.partition("=") for t in toks if "=" in t)}
-        toks = [t for t in toks if "=" not in t]
+        # tee consumes the rest as a literal path, including '=' and case.
+        if toks[0].lower() == "tee":
+            opts = {}
+        else:
+            opts = {k.lower(): v.lower() for k, _, v in (t.partition("=") for t in toks if "=" in t)}
+            toks = [t for t in toks if "=" not in t]
         if not toks:
             raise NetError("missing command")
         word, args = toks[0].lower(), toks[1:]

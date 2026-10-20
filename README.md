@@ -55,6 +55,8 @@ forwarding, failure) and leaves out the detail that gets in the way:
   computers.
 - **Pause and queue.** Freeze playback, queue several packet commands, then
   `resume` to launch them together. Adjust animation with `speed`.
+- **Console logs.** `tee traffic.log` appends console output to a plain text
+  file while keeping it on screen; `tee off` stops capture.
 - **Cable roles** (data, control, fabric) and failures you can trigger by hand.
 - **Multipath**: flow-hashed ECMP across equal-cost routes, link aggregation
   (`lag`) for parallel cables, and MLAG/vPC domains for cables to several switches.
@@ -91,6 +93,7 @@ bytesim --demo loop         # a switch loop with STP off: set off a storm
 bytesim --demo core         # three sites joined through a redundant routed core
 bytesim mynet.json          # open a saved network
 bytesim campus.yaml         # build one from a topology file
+bytesim mynet.json --log-file traffic.log  # also capture the console from startup
 ```
 
 Then, at the command line at the bottom of the screen:

@@ -40,6 +40,7 @@ src/bytesim/
     └── commands/
         ├── registry.py  @command decorator, collect()
         ├── base.py      CommandHost: what handlers may use
+        ├── console.py   console tee
         ├── topology.py  add, link, del, ports, role, fail, files, mode…
         ├── groups.py    group, ungroup, clone, cluster…
         ├── addressing.py ip, dhcp, release, adhoc, dhcpd (+ animated DHCP)
@@ -179,6 +180,16 @@ accounting. Wildcards select devices once, while explicit address/port targets
 normalize to `device:port` so interface choices survive multicast expansion.
 Device-wide targets use the cheapest interface route, breaking ties by port
 number; detailed request logs expose the chosen source and destination addresses.
+
+`ConsoleCommands` owns a session-only tee stream. Both hosts' `log_msg()` methods
+copy their console messages through `write_console_log()`, stripping Rich markup
+and writing line-buffered UTF-8 text to an append-mode file. Write failures
+disable the stream before reporting an error, avoiding recursive logging failures.
+Opening a replacement succeeds before the old file is closed. The app closes its
+stream on unmount; `ScriptRunner.close()` and its context manager close headless
+logs, and `replay()` uses that context manager. Script output suppressed by the
+app during replay is also absent from the tee. `tee` consumes literal path
+arguments, including `=`, instead of interpreting them as options.
 
 ## Scripts and synthesis
 
