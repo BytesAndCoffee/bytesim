@@ -295,6 +295,15 @@ def test_mlag_demo_bundles_every_tier_and_survives_one_failure_per_tier():
         assert len(summaries) == 8 and all("7/7 replies, 0 failed" in s for s in summaries), summaries
 
 
+def test_mlag_demo_rack_switch_is_its_racks_single_point_of_failure():
+    net, _ = demos.mlag()
+    net.reconcile()
+    net.auto_layout(100)
+    r = ScriptRunner(net)
+    r.run("fail s15\nmping c8 all")
+    assert "5/7 replies, 2 failed" in "\n".join(r.log)          # only c1 and c2 (rack1a) are lost
+
+
 @pytest.mark.parametrize("mode", MODES)
 def test_mlag_demo_round_trips(mode):
     net, _ = demos.mlag()

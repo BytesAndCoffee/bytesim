@@ -115,7 +115,9 @@ def mlag() -> tuple[Network, str]:
     Spine, aggregation and leaf are MLAG pairs, and each rack switch is dual-homed to
     its leaf pair. Every span between tiers is a full mesh bundled into one link
     (back-to-back MLAG, like double-sided vPC), so STP blocks nothing, yet any one
-    switch, router or cable can fail without cutting a rack off."""
+    router, spine/aggregation/leaf switch or uplink cable can fail without cutting a
+    rack off. Each rack switch, like a real single top-of-rack switch, is still its
+    own rack's single point of failure (computers can't be bundled)."""
     net = Network()
     net.add("g", 2)                             # g1: the edge
     for _ in range(2):
@@ -175,8 +177,8 @@ def mlag() -> tuple[Network, str]:
         net.group_add(f"pod{pod}", members)
     return net, ("[green]MLAG demo loaded[/]: g1 → core (r1+r2) → spine → agg → leaf → rack, "
                  "each span one bundle.\n  try [cyan]mlags[/], [cyan]lags[/], "
-                 "[cyan]ping c1 c8[/], [cyan]fail s1[/], [cyan]fail s7[/], [cyan]fail r1[/], "
-                 "[cyan]traffic on 8[/], [cyan]mping all all[/]")
+                 "[cyan]ping c1 c8[/], [cyan]fail s1[/], [cyan]fail s7[/], [cyan]fail r1[/] (all survivable), "
+                 "[cyan]fail s15[/] (a single rack switch cuts off its rack), [cyan]mping all all[/]")
 
 
 DEMOS: dict[str, Callable[[], tuple[Network, str]]] = {"basic": basic, "ha": ha, "loop": loop, "core": core,

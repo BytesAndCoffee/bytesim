@@ -711,9 +711,11 @@ router pair, then spine, aggregation, leaf and rack switches and computers in
 two pods. Spine, aggregation and leaf are MLAG pairs, each rack switch is
 dual-homed to its leaf pair, and every span between tiers is one bundle
 (back-to-back MLAG, like double-sided vPC), so nothing is blocked.
-Try `mlags`, `lags`, `ping c1 c8`, then fail a switch at any tier (`fail s1`,
-`fail s3`, `fail s7`) or a router (`fail r1`), and run `mping all all *`
-again: every rack stays reachable.
+Try `mlags`, `lags`, `ping c1 c8`, then fail a spine, aggregation or leaf
+switch (`fail s1`, `fail s3`, `fail s7`) or a router (`fail r1`), and run
+`mping all all *` again: every rack stays reachable. `fail s15` shows the
+weak point that's left: each rack has a single rack switch, so that rack is
+cut off (computers can't be bundled, so there is no dual-homed host).
 
 **Failover:** failing a forwarding cable makes STP unblock a backup port
 (`STP s7:p2 blocking → forwarding`), and traffic reroutes through it.
