@@ -109,6 +109,7 @@ class ByteSimApp(TopologyCommands, GroupCommands, AddressCommands, TrafficComman
     def replace_network(self, net: Network, auto: bool) -> None:
         """Swap in a whole new network (clear, demo, load)."""
         self.net = net
+        self.pending_actions.clear()
         self.auto = auto
         self._ha_seen = {}
         self.canvas.reset()
@@ -144,8 +145,8 @@ class ByteSimApp(TopologyCommands, GroupCommands, AddressCommands, TrafficComman
         c = self.canvas
         self.query_one("#info", Static).update(
             render_inspector(self.net, c.selected, c.selected_group, self.graph, self.auto,
-                             self.naming_text(), self.traffic,
-                             preparing=c.preparing))
+                             self.naming_text(), self.traffic, paused=self.paused,
+                             queued=len(self.pending_actions), preparing=c.preparing))
 
     # ---- the command line ----------------------------------------------
     def on_input_submitted(self, event: Input.Submitted) -> None:

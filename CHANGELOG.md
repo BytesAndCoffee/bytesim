@@ -36,6 +36,9 @@ First release.
 - Adjustable packet animation (`speed slow|normal|fast|<multiplier>`): a shared
   pace scales to long paths while preserving multicast branching. Normal speed
   targets about 1.5 seconds per longest active one-way path.
+- `pause` / `resume` (`play`): freeze in-flight packets and background traffic,
+  queue packet commands, and launch the batch together. `queue` lists pending
+  commands; `queue clear` discards them. Network replacement clears the queue.
 - `mping all <target>` sends from every computer; `mping all all` tests all
   distinct computer pairs. Replies and summaries identify the originating sender.
 - `mping all all *` includes every addressed computer, router and gateway (all
@@ -43,7 +46,7 @@ First release.
   Explicit interface/address targets survive multicast expansion; detailed logs
   show selected endpoints, with deterministic shortest-route/lowest-port selection.
 - Large multicast batches prepare and process arrivals in bounded work slices,
-  with simultaneous request starts and per-sender summaries. Network/layout edits cancel obsolete packet work.
+  with simultaneous request starts, pause support and per-sender summaries. Network/layout edits cancel obsolete packet work.
   Scoped port/adjacency indexes, per-route query caches, reused cable geometry
   and linear-time packet completion reduce all-to-all overhead.
 - Cable roles (data, control, fabric) and failure injection.

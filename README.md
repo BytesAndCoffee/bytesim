@@ -53,7 +53,8 @@ forwarding, failure) and leaves out the detail that gets in the way:
   from individual receivers. Large batches stay interactive and summarize per
   sender. `mping all all *` includes addressed routers and gateways alongside
   computers.
-- **Animation speed.** Slow packets down or speed them up with `speed`.
+- **Pause and queue.** Freeze playback, queue several packet commands, then
+  `resume` to launch them together. Adjust animation with `speed`.
 - **Cable roles** (data, control, fabric) and failures you can trigger by hand.
 - **Multipath**: flow-hashed ECMP across equal-cost routes, link aggregation
   (`lag`) for parallel cables, and MLAG/vPC domains for cables to several switches.

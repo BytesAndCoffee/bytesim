@@ -21,6 +21,56 @@ class TrafficCommands(CommandHost):
     SPEEDS = {"slow": 0.5, "normal": 1.0, "fast": 3.0}
     BULK_PAIRS = 128
 
+    @command("pause")
+    def cmd_pause(self, args: list[str], opts: dict[str, str]) -> None:
+        if args:
+            raise NetError("usage: pause")
+        self.paused = True
+        self.log_msg("[yellow]paused[/] · packet actions will queue; use [cyan]resume[/] to start them together")
+        self.refresh_sidebar()
+
+    def queue_action(self, tokens: list[str]) -> None:
+        self.pending_actions.append(list(tokens))
+        self.log_msg(f"[yellow]queued {len(self.pending_actions)}[/]: {escape(' '.join(tokens))}")
+        self.refresh_sidebar()
+
+    @command("queue")
+    def cmd_queue(self, args: list[str], opts: dict[str, str]) -> None:
+        if args and [a.lower() for a in args] != ["clear"]:
+            raise NetError("usage: queue [clear]")
+        if args:
+            count = len(self.pending_actions)
+            self.pending_actions.clear()
+            self.log_msg(f"cleared {count} queued action{'s' if count != 1 else ''}")
+            self.refresh_sidebar()
+        elif self.pending_actions:
+            for i, tokens in enumerate(self.pending_actions, 1):
+                self.log_msg(f"  {i}. {escape(' '.join(tokens))}")
+        else:
+            self.log_msg("[dim]queue empty[/]")
+
+    @command("resume", "play", "unpause")
+    def cmd_resume(self, args: list[str], opts: dict[str, str]) -> None:
+        if args:
+            raise NetError("usage: resume")
+        actions = list(self.pending_actions)
+        self.pending_actions.clear()
+        self.paused = False
+        failed = 0
+        # Dispatch the entire batch without yielding to the animation timer:
+        # all new request packets begin on the next shared tick.
+        for tokens in actions:
+            try:
+                self.dispatch(tokens)
+            except NetError as e:
+                failed += 1
+                self.log_msg(f"[red]✗ queued {escape(' '.join(tokens))}: {escape(str(e))}[/]")
+        started = len(actions) - failed
+        self.log_msg(f"[green]resumed[/] · {started} queued action{'s' if started != 1 else ''} started"
+                     + (f", {failed} failed" if failed else ""))
+        self.canvas.animate()
+        self.refresh_sidebar()
+
     @command("speed")
     def cmd_speed(self, args: list[str], opts: dict[str, str]) -> None:
         usage = "usage: speed [slow|normal|fast|0.1..10]"
@@ -566,7 +616,7 @@ class TrafficCommands(CommandHost):
     def traffic_step(self, dt: float) -> int:
         """Advance the traffic by dt seconds; returns how many packets were sent."""
         gen = self.traffic
-        if gen is None or (self.replaying and not self.headless):
+        if self.paused or gen is None or (self.replaying and not self.headless):
             return 0
         gen.cool(dt)
         n = gen.due(dt)

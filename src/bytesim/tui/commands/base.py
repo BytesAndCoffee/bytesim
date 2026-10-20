@@ -17,8 +17,16 @@ class CommandHost:
     auto: bool
     graph: bool
     animation_speed: float = 1.0  # session playback multiplier, independent of traffic rate
+    paused: bool = False
     replaying: int = 0          # > 0 while a script runs (hosts may batch their side effects)
     headless: bool = False      # True for the screenless ScriptRunner
+
+    @property
+    def pending_actions(self) -> list[list[str]]:
+        return self.__dict__.setdefault("_pending_actions", [])
+
+    def queue_action(self, tokens: list[str]) -> None:
+        raise NotImplementedError
 
     @property
     def canvas(self) -> "NetCanvas":

@@ -32,7 +32,7 @@ def one_step_budget(monkeypatch):
     monkeypatch.setattr(canvas_module, "time", SimpleNamespace(perf_counter=now))
 
 
-def test_bulk_start_callback_backlog_and_complete_accounting(monkeypatch):
+def test_bulk_pause_start_callback_backlog_and_complete_accounting(monkeypatch):
     one_step_budget(monkeypatch)
 
     async def go():
@@ -44,6 +44,14 @@ def test_bulk_start_callback_backlog_and_complete_accounting(monkeypatch):
             c = app.canvas
             app.run_command("mping all all")
             assert c.preparing and c.busy and not c.packets
+            c._tick()
+            app.run_command("pause")
+            before = len(c._preparing), len(c.packets)
+            for _ in range(10):
+                c._tick()
+                c._work()
+            assert (len(c._preparing), len(c.packets)) == before
+            app.run_command("resume")
             for _ in range(400):
                 if not c.preparing:
                     break
@@ -56,6 +64,12 @@ def test_bulk_start_callback_backlog_and_complete_accounting(monkeypatch):
                 p.pos = len(p.cells) + TRAIL
             c._tick()
             assert c._callbacks and c.busy
+            app.run_command("pause")
+            before = len(c._callbacks), len(c.packets)
+            c._work()
+            c._tick()
+            assert (len(c._callbacks), len(c.packets)) == before
+            app.run_command("resume")
             for _ in range(600):
                 if not c.busy:
                     break
@@ -79,7 +93,8 @@ def test_bulk_preparation_really_yields_to_the_event_loop(monkeypatch):
             assert app.canvas.preparing
             # Independent tasks can run while routes are still being prepared.
             await asyncio.sleep(0.01)
-            assert app.canvas.preparing
+            app.run_command("pause")
+            assert app.canvas.preparing and app.paused
             assert "preparing packet batch" in app.query_one("#info").render().plain
             app.canvas.reset()
             assert not app.canvas.busy
@@ -87,15 +102,17 @@ def test_bulk_preparation_really_yields_to_the_event_loop(monkeypatch):
     asyncio.run(go())
 
 
-def test_bulk_and_small_actions_share_the_same_start(monkeypatch):
+def test_queued_bulk_and_small_actions_share_the_same_start(monkeypatch):
     one_step_budget(monkeypatch)
 
     async def go():
         app = ByteSimApp(network(), auto=False)
         async with app.run_test(size=(140, 50)) as pilot:
             await pilot.pause()
+            app.run_command("pause")
             app.run_command("mping all all")
             app.run_command("ping c1 c2")
+            app.run_command("resume")
             c = app.canvas
             assert c.preparing and len(c.packets) == 1
             for _ in range(400):

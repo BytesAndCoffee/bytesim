@@ -310,7 +310,7 @@ class NetCanvas(Widget, can_focus=True):
             self._timer = self.set_interval(1 / ANIMATION_FPS, self._tick)
 
     def _schedule_work(self) -> None:
-        if (self._preparing or self._callbacks) and not self._work_scheduled:
+        if (self._preparing or self._callbacks) and not self._work_scheduled and not self.app.paused:  # type: ignore[attr-defined]
             self._work_scheduled = True
             # A positive timer delay yields the event loop even when Textual's
             # message queue is continually refilled by this batch.
@@ -318,7 +318,8 @@ class NetCanvas(Widget, can_focus=True):
 
     def _work(self) -> None:
         self._work_scheduled = False
-        self._drain_work()
+        if not self.app.paused:  # type: ignore[attr-defined]
+            self._drain_work()
 
     def _drain_work(self) -> None:
         """Run one bounded slice, then let input, drawing and timers run."""
@@ -339,6 +340,8 @@ class NetCanvas(Widget, can_focus=True):
         self._schedule_work()
 
     def _tick(self) -> None:
+        if self.app.paused:  # type: ignore[attr-defined]
+            return
         if self._preparing:
             # Hold playback while building the batch: every initial request
             # still starts at pos=0 together, even across several commands.

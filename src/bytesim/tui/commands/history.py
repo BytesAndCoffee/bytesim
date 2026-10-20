@@ -80,6 +80,7 @@ class HistoryCommands(CommandHost):
 
     def _restore(self, step: Step) -> None:
         self.net = step.net
+        self.pending_actions.clear()
         self.auto = step.auto
         c = self.canvas
         c.reset()
