@@ -152,3 +152,8 @@ already happened.
 
 Scripts aren't only for exports. You can write your own lab setups, or keep a
 list of commands to repeat.
+
+On an already configured network, scripts can also batch packet actions with
+`pause`, several `ping` / `mping` / `unicast` commands, then `resume`. Requests
+start together on the next animation tick. Leaving out `resume` keeps them
+queued for inspection with `queue`.

@@ -411,6 +411,35 @@ Changes apply to packets already in flight. Speed is a session preference,
 retained when loading or clearing a network. It controls animation timing;
 `traffic rate` still controls how many background packets are generated.
 
+### Pause and simultaneous actions
+
+Use `pause` to freeze packets already in flight and stop background traffic.
+Packet commands entered while paused wait in a queue:
+
+```text
+pause
+ping c1 c6
+mping c2 c3 c4
+unicast c5 c6
+queue                 inspect the pending commands
+resume                launch all queued requests on the next animation tick
+```
+
+`play` and `unpause` are aliases for `resume`. `queue clear` discards queued
+commands while leaving playback paused. The inspector shows whether playback
+is paused and how many actions are queued.
+
+Ping, multicast ping, unicast, multicast, broadcast and explicit DHCP requests
+are queued, including their aliases. Editing, inspection and `speed` still work
+while paused. Routes are calculated when the batch starts, using the current
+topology. If a queued action fails, its error is reported and the remaining
+actions still start. Existing packets resume from their frozen positions;
+background traffic resumes without a catch-up burst.
+
+Replacing the network (`clear`, `load`, `demo`, or undo/redo) discards queued
+actions so they cannot target a different network. Pause remains a session
+setting. Queues and playback state are not saved in network snapshots.
+
 `mping <src> <receivers…>` sends one multicast echo request and collects a
 separate reply from each receiver. `ping` chooses this behavior when given
 multiple destinations, a group, `all`, or `*`. You can also write
@@ -444,7 +473,8 @@ address and physical ingress port need not be the same.
 Batches of 128 or more source/receiver pairs prepare routes in short slices
 while the UI remains responsive. Requests wait at position zero until the whole
 batch is ready, then leave together. Return-route calculations also yield between
-small batches of arrivals. Editing the network, layout or simulation mode cancels prepared and
+small batches of arrivals. `pause` freezes preparation as well as playback;
+`resume` continues it. Editing the network, layout or simulation mode cancels prepared and
 in-flight packets so their paths cannot reference an older topology.
 
 Large batches default to one reply/failure summary per sender instead of logging
@@ -830,6 +860,8 @@ them, and a group name on its own selects the group.
 | `mode graph\|addr` | | graph or address mode |
 | `traffic on [rate] [seed=] [hosts=] [mix=]`, `traffic [off\|rate n\|reset]` | | random background traffic and statistics |
 | `speed [slow\|normal\|fast\|0.1..10]` | | set or show packet animation speed; normal is 1x |
+| `pause`, `resume` | `play`, `unpause` (resume) | freeze playback and queue packet commands, then start them together |
+| `queue [clear]` | | inspect queued actions or discard them |
 | `broadcast <id[:port]>` | `bcast`, `flood` | flood one frame (storms in a live loop) |
 | `lag`, `lag auto`, `lag <switch\|domain> <switch\|router\|gateway\|domain>`, `unlag …`, `lags` | | find and bundle aggregatable spans |
 | `mlag <group…>`, `unmlag <group>`, `mlags` | | make a group of switches act as one (needs peer links) |

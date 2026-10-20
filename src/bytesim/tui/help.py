@@ -38,6 +38,8 @@ HELP = """\
   [cyan]traffic on[/] \\[packets/s] \\[seed=N] \\[hosts=group] \\[mix=unicast,internet,broadcast]   random traffic
   [cyan]traffic[/] (statistics) · [cyan]traffic rate[/] <n> · [cyan]traffic reset[/] · [cyan]traffic off[/]
   [cyan]speed[/] \\[slow|normal|fast|0.1..10]   60 fps packet animation (normal = 1x; no argument shows it)
+  [cyan]pause[/] · [cyan]resume[/] ([cyan]play[/])          freeze playback, queue packet actions, then launch them together
+  [cyan]queue[/] · [cyan]queue clear[/]               inspect or discard queued actions
 [b]Addressing[/]  an address is (network, host): network id + 8-bit host, e.g. [i](2,14)[/]
   MACs name the physical port: R1A = r1 port 1. A network spans every switch it touches.
   Routers/gateways take host 1, 2… on each network and serve DHCP; computers lease hosts 10+,

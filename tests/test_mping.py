@@ -183,6 +183,14 @@ def test_all_senders_handle_unreachable_targets_per_sender():
     assert "0/1 replies, 1 failed[/] · source c10" in text
 
 
+def test_all_to_all_can_be_queued_and_then_started():
+    r = small_network()
+    r.run("pause\nmping all all")
+    assert len(r.pending_actions) == 1 and "reply from" not in log_text(r)
+    r.run("resume")
+    assert log_text(r).count("reply from") == 6 and not r.pending_actions
+
+
 def test_all_senders_reports_empty_networks_and_self_only_targets():
     r = ScriptRunner()
     with pytest.raises(NetError, match="no computers"):
@@ -280,6 +288,14 @@ def test_whole_network_without_computers_and_with_no_pingable_devices():
     r.net.add("s")
     with pytest.raises(NetError, match="no pingable devices"):
         r.run("mping all all *")
+
+
+def test_whole_network_mode_can_be_paused_and_queued():
+    r = mixed_network()
+    r.run("pause\nmping all all *")
+    assert len(r.pending_actions) == 1 and r.pending_actions[0] == ["mping", "all", "all", "*"]
+    r.run("resume")
+    assert log_text(r).count("multicast ping: 3/3 replies, 0 failed") == 4
 
 
 def test_multihomed_device_selection_is_deterministic_and_can_be_interface_qualified():

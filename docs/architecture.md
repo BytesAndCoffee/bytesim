@@ -149,11 +149,19 @@ normal (1x), fast (3x), or a numeric multiplier from 0.1 to 10.
 Multicast copies share cells until their paths split, so a single packet
 appears to fork.
 
+Playback pause is session state on `CommandHost`. The shared interpreter
+queues explicit packet-command tokens before calling their handlers, preserving
+aliases and options. `resume` dispatches the batch without yielding to the
+animation timer, so every new request starts at position zero on the next tick.
 Small batches compute routes on dispatch. At 128 source/receiver pairs, multicast
 uses generators that yield between route queries and packet creation. The canvas
 drains preparation in 6 ms slices, scheduling each continuation with a positive
 timer delay to yield the event loop. Playback waits for preparation to finish,
-so every request in the batch starts at position zero together. Network/layout/mode edits cancel prepared
+preserving the simultaneous start. The canvas freezes
+packet positions, callbacks, flashes and its frame clock while paused;
+`traffic_step` skips generation and load decay. The traffic timer still updates
+its time reference, preventing a catch-up burst. Network replacement and
+history restoration clear pending commands. Network/layout/mode edits cancel prepared
 and in-flight work; a snapshot comparison avoids cancelling on unchanged refreshes.
 
 Multicast ping uses the same request distribution as one-way multicast. On

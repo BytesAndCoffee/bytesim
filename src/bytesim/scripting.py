@@ -87,6 +87,7 @@ class ScriptRunner(TopologyCommands, GroupCommands, AddressCommands, TrafficComm
 
     def replace_network(self, net: Network, auto: bool) -> None:
         self.net = net
+        self.pending_actions.clear()
 
     def arrange(self, announce: bool = False) -> None:
         pass
