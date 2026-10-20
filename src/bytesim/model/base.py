@@ -9,10 +9,13 @@ class NetworkBase:
     """Holds the network's state. The mixins in this package add behaviour on top."""
 
     def __init__(self) -> None:
+        self.layout_mode = "layered"             # display arrangement; saved with positions
+        self.group_orientation = "auto"          # layout direction; child groups inherit it
         self.devices: dict[str, Device] = {}
         self.links: list[Link] = []
         self.counters = {k: 0 for k in KINDS}
         self.groups: dict[str, list[str]] = {}    # group -> member device ids / group names
+        self.group_layouts: dict[str, str] = {}   # group -> horizontal / vertical (absent: auto)
         self.ifaces: dict[str, Iface] = {}        # "c1:1" -> Iface
         self.dhcp_off: set[str] = set()           # routers/gateways not serving DHCP
         self.mac_tables: dict[str, dict[str, int]] = {}   # switch -> {mac: port}

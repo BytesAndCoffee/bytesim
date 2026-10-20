@@ -1,18 +1,49 @@
-"""Automatic arrangement: rows by device type, groups kept together, nested frames."""
+"""Deterministic network layouts, with room for devices and nested group frames."""
 from __future__ import annotations
 
 from collections import deque
+from math import cos, pi, sin
 from typing import Callable
 
 from ..constants import BOX_H, H_GAP, KINDS, LAYER_GAP, RANK
 from .base import NetworkBase
-from .types import Device
+from .types import Device, NetError
+
+LAYOUT_MODES = ("layered", "tree", "circular", "grid", "compact", "compact-layered")
+ORIENTATIONS = ("auto", "horizontal", "vertical")
+LAYOUT_CHOICES = {"layout_mode": LAYOUT_MODES, "group_orientation": ORIENTATIONS}
 
 
 class LayoutMixin(NetworkBase):
-    def auto_layout(self, width: int) -> None:
+    def auto_layout(self, width: int, mode: str | None = None, orientation: str | None = None,
+                    height: int = 40) -> None:
+        """Arrange the physical topology; remember an explicitly selected mode.
+
+        Layered (the default) follows device kinds; tree follows cable depth.
+        Circular places blocks around an ellipse, grid packs them into rows,
+        and compact packs by height with tighter spacing. Compact-layered uses
+        the layered graph ordering with the same tighter spacing.
+        Groups stay together in every mode. Failed and control cables still count
+        as physical connections, so failure injection doesn't rearrange the view.
+        Orientation changes flow without flattening the selected algorithm;
+        vertical grid/compact packing wraps at ``height`` (terminal rows).
+        """
+        mode = self.layout_mode if mode is None else mode
+        orientation = self.group_orientation if orientation is None else orientation
+        if mode not in LAYOUT_MODES:
+            raise NetError(f"layout must be one of: {', '.join(LAYOUT_MODES)}")
+        if orientation not in ORIENTATIONS:
+            raise NetError(f"orientation must be one of: {', '.join(ORIENTATIONS)}")
+        self.layout_mode = mode
+        self.group_orientation = orientation
         if not self.devices:
             return
+        if mode in ("layered", "tree") and orientation == "auto" and not self.group_layouts:
+            self._layered_layout(width, tree=mode == "tree")
+        else:
+            self._block_layout(max(1, width), max(1, height), mode)
+
+    def _layered_layout(self, width: int, tree: bool = False) -> None:
         adj: dict[str, set[str]] = {d: set() for d in self.devices}
         for l in self.links:
             adj[l.a].add(l.b)
@@ -36,6 +67,21 @@ class LayoutMixin(NetworkBase):
                     for v in sorted(adj[u] & same):
                         if v not in key:
                             key[v] = (RANK[kind], key[u][1] + 1)
+                            q.append(v)
+        if tree:
+            # A BFS forest rooted at the first gateway/router/switch/computer
+            # in each component. Physical links count regardless of live state.
+            key = {}
+            for dev in self.sorted_devices():
+                if dev.id in key:
+                    continue
+                key[dev.id] = (0, 0)
+                q = deque([dev.id])
+                while q:
+                    u = q.popleft()
+                    for v in sorted(adj[u], key=lambda d: (RANK[self.devices[d].kind], self.devices[d].num)):
+                        if v not in key:
+                            key[v] = (key[u][0] + 1, 0)
                             q.append(v)
         # Devices directly in the same group share a row (the highest any would get).
         # Subgroups keep their own rows; nesting only keeps members side by side.
@@ -162,6 +208,165 @@ class LayoutMixin(NetworkBase):
         if shift > 0:
             for d in self.devices.values():
                 d.x += shift
+
+    def _layout_bounds(self, member: str) -> tuple[int, int, int, int]:
+        if member in self.groups:
+            return self.group_bounds(member)
+        d = self.devices[member]
+        return d.x, d.y, d.x + d.width - 1, d.y + BOX_H - 1
+
+    def _move_layout_member(self, member: str, x: int, y: int) -> None:
+        x0, y0, _, _ = self._layout_bounds(member)
+        ids = self.devices_in(member) if member in self.groups else [member]
+        for did in ids:
+            d = self.devices[did]
+            d.x += x - x0
+            d.y += y - y0
+
+    def _layout_levels(self, members: list[str], sizes: list[tuple[int, int]],
+                       tree: bool, h_gap: int, v_gap: int) -> list[tuple[int, int]]:
+        """Layer an induced graph, treating each child group as one node."""
+        owner = {d: i for i, m in enumerate(members)
+                 for d in (self.devices_in(m) if m in self.groups else [m])}
+        ranks = [min(RANK[self.devices[d].kind] for d, i in owner.items() if i == n)
+                 for n in range(len(members))]
+        adj: list[set[int]] = [set() for _ in members]
+        for link in self.links:
+            a, b = owner.get(link.a), owner.get(link.b)
+            if a is not None and b is not None and a != b:
+                adj[a].add(b)
+                adj[b].add(a)
+        order = sorted(range(len(members)), key=lambda i: (ranks[i], i))
+        layers: dict[int, tuple[int, int]] = {}
+        for rank in ([None] if tree else sorted(set(ranks))):
+            same = {i for i in order if rank is None or ranks[i] == rank}
+            roots = [i for i in order if i in same and any(ranks[n] < ranks[i] for n in adj[i])]
+            for seed in ([] if tree else roots) + [i for i in order if i in same]:
+                if seed in layers:
+                    continue
+                layers[seed] = (0 if tree else ranks[seed], 0)
+                q = deque([seed])
+                while q:
+                    u = q.popleft()
+                    for v in sorted(adj[u] & same):
+                        if v not in layers:
+                            layers[v] = (layers[u][0], layers[u][1] + 1)
+                            q.append(v)
+        rows = [[i for i in order if layers[i] == key] for key in sorted(set(layers.values()))]
+        # Preserve branching while reducing crossings between neighbouring levels.
+        for _ in range(2):
+            for row in range(1, len(rows)):
+                ref = {n: i for i, n in enumerate(rows[row - 1])}
+                fallback = {n: i for i, n in enumerate(rows[row])}
+                def bary(n: int) -> float:
+                    neighbors = [ref[v] for v in sorted(adj[n]) if v in ref]
+                    return sum(neighbors) / len(neighbors) if neighbors else fallback[n]
+                rows[row].sort(key=bary)
+        spans = [sum(sizes[i][0] for i in row) + h_gap * (len(row) - 1) for row in rows]
+        out = [(0, 0)] * len(members)
+        y = 0
+        for row, span in zip(rows, spans):
+            x = (max(spans) - span) // 2
+            for i in row:
+                out[i] = (x, y)
+                x += sizes[i][0] + h_gap
+            y += max(sizes[i][1] for i in row) + v_gap
+        return out
+
+    def _block_layout(self, width: int, height: int, mode: str) -> None:
+        """Lay out group subtrees first, then pack their full frame rectangles.
+
+        Measuring actual bounds (including nesting padding) makes groups indivisible
+        blocks when arranging their parent. No force simulation or random seed is
+        needed, and device port counts may vary freely.
+        """
+        bounds, move = self._layout_bounds, self._move_layout_member
+
+        def pack(members: list[str], orientation: str) -> None:
+            for m in members:
+                if m in self.groups:
+                    pack(self.groups[m], self.group_layouts.get(m, self.group_orientation))
+                else:
+                    self.devices[m].x = self.devices[m].y = 0
+            if not members:
+                return
+            # Orient the algorithm's coordinates and block dimensions together;
+            # boxes stay upright and the layout keeps its levels, rows or ring.
+            layered = mode in ("layered", "tree", "compact-layered")
+            transpose = orientation == ("horizontal" if layered else "vertical")
+            limit = height if transpose else width
+            h_gap, v_gap = (2, 3) if mode in ("compact", "compact-layered") else (H_GAP, LAYER_GAP)
+            if transpose:
+                h_gap, v_gap = v_gap, h_gap
+            sizes = [(bounds(m)[2] - bounds(m)[0] + 1,
+                      bounds(m)[3] - bounds(m)[1] + 1) for m in members]
+            if transpose:
+                sizes = [(h, w) for w, h in sizes]
+
+            def place(member: str, x: int, y: int) -> None:
+                move(member, y if transpose else x, x if transpose else y)
+
+            if layered:
+                for m, (x, y) in zip(members, self._layout_levels(members, sizes, mode == "tree", h_gap, v_gap)):
+                    place(m, x, y)
+            elif mode == "compact":
+                # Best-fit shelves, tallest blocks first. A shelf's first block
+                # sets its height; later blocks fill its remaining width without
+                # increasing that height. Ties follow the original member order.
+                shelves: list[list[int]] = []  # y, height, next free x
+                order = sorted(range(len(members)), key=lambda i: (-sizes[i][1], -sizes[i][0], i))
+                for i in order:
+                    w, h = sizes[i]
+                    fits = [(limit - x - w, row) for row, (_, _, x) in enumerate(shelves)
+                            if x + w <= limit]
+                    if fits:
+                        row = min(fits)[1]
+                    else:
+                        y = shelves[-1][0] + shelves[-1][1] + v_gap if shelves else 0
+                        row = len(shelves)
+                        shelves.append([y, h, 0])
+                    y, _, x = shelves[row]
+                    place(members[i], x, y)
+                    shelves[row][2] += w + h_gap
+            elif mode == "circular" and len(members) > 1:
+                centers = [(cos(2 * pi * i / len(members) - pi / 2),
+                            sin(2 * pi * i / len(members) - pi / 2)) for i in range(len(members))]
+                pairs = [(i, j) for i in range(len(members)) for j in range(i + 1, len(members))]
+                rx = max(1.0, (limit - max(w for w, _ in sizes) - 4) / 2)
+                ry = (max(h for _, h in sizes) + LAYER_GAP + 2) / 2
+                # Use the canvas width when possible. Equal-height pairs need
+                # horizontal room; other close pairs can separate vertically.
+                for i, j in pairs:
+                    dx = abs(centers[i][0] - centers[j][0])
+                    dy = abs(centers[i][1] - centers[j][1])
+                    if dy < 1e-8:
+                        rx = max(rx, ((sizes[i][0] + sizes[j][0]) / 2 + H_GAP + 2) / dx)
+                for i, j in pairs:
+                    dx = abs(centers[i][0] - centers[j][0])
+                    dy = abs(centers[i][1] - centers[j][1])
+                    if rx * dx < (sizes[i][0] + sizes[j][0]) / 2 + H_GAP + 2 and dy >= 1e-8:
+                        ry = max(ry, ((sizes[i][1] + sizes[j][1]) / 2 + LAYER_GAP + 2) / dy)
+                for m, (w, h), (cx, cy) in zip(members, sizes, centers):
+                    place(m, round(rx * cx - w / 2), round(ry * cy - h / 2))
+            else:
+                x = y = row_height = 0
+                for m, (w, h) in zip(members, sizes):
+                    if x and x + w > limit:
+                        x, y, row_height = 0, y + row_height + LAYER_GAP, 0
+                    place(m, x, y)
+                    x += w + h_gap
+                    row_height = max(row_height, h)
+
+        # Sort devices by kind/id and place each outer group at its first device.
+        # Use member order as the deterministic tie-breaker inside groups.
+        roots = list(dict.fromkeys((self.chain(d.id) or [d.id])[0]
+                                   for d in self.sorted_devices()))
+        pack(roots, self.group_orientation)
+        left = min(bounds(m)[0] for m in roots)
+        top = min(bounds(m)[1] for m in roots)
+        for m in roots:
+            x0, y0, _, _ = bounds(m)
+            move(m, x0 + 2 - left, y0 + 1 - top)
 
     def _separate_siblings(self) -> None:
         """A group spanning several rows can overlap a sibling on one of them;

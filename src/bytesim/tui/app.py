@@ -94,10 +94,10 @@ class ByteSimApp(TopologyCommands, GroupCommands, AddressCommands, TrafficComman
 
     def arrange(self, announce: bool = False) -> None:
         self.auto = True
-        self.net.auto_layout(self.canvas.size.width or 120)
         self.canvas.pan = (0, 0)
         if announce:
-            self.log_msg("[green]auto-arrange on[/]")
+            self.log_msg(f"[green]auto-arrange on[/] · layout: [b]{self.net.layout_mode}[/]"
+                         + f" · orientation: [b]{self.net.group_orientation}[/]")
         self.changed()
 
     def manual_moved(self) -> None:
@@ -122,7 +122,7 @@ class ByteSimApp(TopologyCommands, GroupCommands, AddressCommands, TrafficComman
         if not self.graph:
             self._ha_report()
         if self.auto:
-            self.net.auto_layout(self.canvas.size.width or 120)
+            self.net.auto_layout(self.canvas.size.width or 120, height=self.canvas.size.height or 40)
         c = self.canvas
         if c.selected not in self.net.devices:
             c.selected = None

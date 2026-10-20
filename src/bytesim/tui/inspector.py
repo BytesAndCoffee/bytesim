@@ -17,6 +17,8 @@ def render_inspector(net: Network, sel: str | None, selected_group: str | None,
                      graph: bool, auto: bool, naming: str = "off", traffic=None) -> str:
     out = [f"mode: [b]{'graph' if graph else 'addr'}[/]  ·  auto-arrange: "
            f"{'[green]on[/]' if auto else '[yellow]off[/]'}",
+           f"layout: [cyan]{net.layout_mode}[/]",
+           f"orientation: [cyan]{net.group_orientation}[/]",
            f"auto-renumber: {'[dim]off[/]' if naming == 'off' else f'[cyan]{naming}[/]'}",
            f"{len(net.devices)} devices · {len(net.links)} cables", ""]
     if traffic is not None:
@@ -41,6 +43,7 @@ def render_inspector(net: Network, sel: str | None, selected_group: str | None,
         inside = sum(1 for l in net.links if l.a in members and l.b in members)
         outside = sum(1 for l in net.links if (l.a in members) != (l.b in members))
         out.append(f"[b reverse {group_color(gsel)}] {gsel} [/] [b]group[/]  {len(members)} devices")
+        out.append(f"layout: {net.group_layouts.get(gsel, net.group_orientation)}")
         if (chain := net.chain(gsel)):
             out.append(f"[dim]inside {' › '.join(chain)}[/]")
         for sub in net.subgroups(gsel):

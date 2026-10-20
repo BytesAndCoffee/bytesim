@@ -7,6 +7,19 @@ First release.
 - Gateways, routers, switches and computers with any number of ports or NICs;
   cabling by typing device ids.
 - Automatic layered layout; moving devices with the keyboard or mouse; panning.
+- Selectable tree, circular and grid layouts alongside the default layered
+  arrangement (`layout <mode>`, `layout list`); nested groups stay together,
+  and the selected mode is retained in JSON saves and undo/redo.
+- Per-group horizontal or vertical flow (`group <name> layout=vertical`),
+  including nested groups; orientations survive saves, undo/redo and cloning.
+- `layout` accepts a layout and/or orientation in either order
+  (`layout grid vertical`, `layout vertical`); per-group settings take precedence.
+- `layout compact`: tighter spacing and height-based packing of devices and
+  nested group blocks, with orientation overrides and snapshot persistence.
+- Orientation preserves each layout's structure: layered/tree levels and
+  branches, wrapping rows/columns for grid/compact, and rings for circular.
+- `layout compact-layered`: tighter block and level spacing while preserving
+  layered device-kind ordering, branches, nested groups and orientation.
 - Nestable groups drawn as frames.
 - Addressing as (network, 8-bit host); MACs named after their port; router
   autoconfiguration, animated DHCP, ad-hoc fallback, static addresses.

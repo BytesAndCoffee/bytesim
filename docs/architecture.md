@@ -23,7 +23,7 @@ src/bytesim/
 │   ├── addressing.py    router autoconfig, DHCP, ad-hoc, reconcile()
 │   ├── routing.py       host → gateway → cheapest router path
 │   ├── ha.py            clusters: partitions, policies, virtual-gateway owners
-│   ├── layout.py        automatic arrangement
+│   ├── layout.py        layered, tree, circular, grid and compact variants
 │   ├── naming.py        BFS/DFS traversal, renumber()
 │   ├── stp.py           spanning tree, loop detection, flooding, storms
 │   ├── equivalence.py   canonical form of a network; differences()
@@ -84,7 +84,21 @@ The model's core questions are answered by a few functions:
   frames are still alive after `len(links) + 2` hops, it's a storm.
 - `reconcile()`: runs `stp_update()`, then brings addresses in line with the
   cabling, and returns notes describing what changed. The app calls it after every change.
-- `auto_layout(width)`: positions every device.
+- `auto_layout(width, mode=None, orientation=None, height=40)`: positions every
+  device using the saved `layout_mode` and orientation unless supplied. The
+  original layered/tree arrangement is retained for automatic orientation with
+  no group overrides. Oriented layouts recursively arrange child groups first,
+  then treat their complete frame rectangles as nodes. Layered/tree preserve
+  kind/BFS levels on the induced graph; grid wraps; compact packs best-fit rows
+  by decreasing block height; compact-layered shares the layered graph ordering
+  with tighter block and level gaps; circular keeps its ring. Horizontal/vertical
+  transposes algorithm coordinates and block dimensions together, keeping boxes
+  upright. Vertical packing uses the canvas height as its wrap limit.
+  `group_layouts` overrides direction inside individual groups.
+  `LAYOUT_CHOICES` supplies the valid layouts
+  and orientations; the command dispatches each argument to its setting by
+  membership, regardless of order. Layouts use physical connections,
+  independent of live state.
 - `traversal(order, root)` / `renumber(order, root)`: BFS/DFS visit order,
   and renaming every device to match (returns `{old: new}`).
 

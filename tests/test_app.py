@@ -106,6 +106,97 @@ def test_tokens_keep_parentheses_together():
     assert ByteSimApp.tokens("group fab(1) s1") == ["group", "fab(1)", "s1"]
 
 
+def test_layout_selection_survives_edits_manual_moves_undo_and_load(tmp_path):
+    async def go():
+        app = ByteSimApp()
+        async with app.run_test(size=(170, 60)) as pilot:
+            def run(cmd):
+                app.run_command(cmd)
+
+            run("demo ha")
+            run("layout vertical circular")
+            assert app.net.layout_mode == "circular" and app.auto
+            assert app.net.group_orientation == "vertical"
+            run("undo")
+            assert app.net.layout_mode == "layered" and app.net.group_orientation == "auto"
+            run("redo")
+            assert app.net.layout_mode == "circular" and app.net.group_orientation == "vertical"
+            run("add s")
+            assert app.net.layout_mode == "circular"
+            app.canvas.select("s1")
+            app.canvas.action_move(1, 0)
+            assert not app.auto
+            run("auto")
+            assert app.auto and app.net.layout_mode == "circular"
+            path = tmp_path / "layout.json"
+            run(f"save {path}")
+            run("layout grid")
+            run(f"load {path}")
+            assert not app.auto and app.net.layout_mode == "circular"
+            assert app.net.group_orientation == "vertical"
+            saved = {d.id: (d.x, d.y) for d in app.net.devices.values()}
+            run("auto")
+            assert {d.id: (d.x, d.y) for d in app.net.devices.values()} == saved
+            steps = len(app.undo_stack)
+            run("layout list")
+            run("layout nonsense")
+            run("layout grid extra")
+            assert app.net.layout_mode == "circular" and len(app.undo_stack) == steps
+            run("layout compact-layered")
+            await pilot.pause()
+            assert "layout: compact-layered" in app.query_one("#info").render().plain
+            return " ".join(l.text for l in app.query_one("#log").lines)
+
+    log = asyncio.run(go())
+    log = " ".join(log.split())
+    assert "available: layered, tree, circular, grid, compact, compact-layered" in log and "usage: layout" in log
+
+
+def test_group_layout_command_and_script_batching(tmp_path):
+    async def go():
+        app = ByteSimApp()
+        async with app.run_test(size=(170, 60)) as pilot:
+            app.run_command("demo ha")
+            app.run_command("group fab1 layout=vertical")
+            assert app.net.devices["s1"].x == app.net.devices["s2"].x
+            assert app.net.devices["s1"].y < app.net.devices["s2"].y
+            app.run_command("undo")
+            assert app.net.group_layouts == {}
+            app.run_command("redo")
+            assert app.net.group_layouts == {"fab1": "vertical"}
+            app.manual_moved()
+            app.run_command("group fab1 layout=horizontal")
+            assert app.auto and app.net.devices["s1"].y == app.net.devices["s2"].y
+            steps = len(app.undo_stack)
+            app.run_command("group fab1 layout=diagonal")
+            assert len(app.undo_stack) == steps and app.net.group_layouts == {"fab1": "horizontal"}
+            path = tmp_path / "layouts.txt"
+            path.write_text("layout grid\ngroup fab1 layout=vertical\ngroup fab2 layout=horizontal\n")
+            app.run_command(f"run {path}")
+            assert app.auto and app.net.layout_mode == "grid"
+            assert app.net.devices["s1"].y < app.net.devices["s2"].y
+            assert app.net.devices["s3"].y == app.net.devices["s4"].y
+            assert len(app.undo_stack) == steps + 1
+            await pilot.pause()
+
+    asyncio.run(go())
+
+
+def test_vertical_grid_uses_the_actual_canvas_height():
+    async def go():
+        app = ByteSimApp()
+        async with app.run_test(size=(140, 32)) as pilot:
+            app.run_command("add s 4 16")
+            app.run_command("layout grid vertical")
+            await pilot.pause()
+            devices = list(app.net.devices.values())
+            assert len({d.x for d in devices}) > 1
+            assert len({d.y for d in devices}) > 1
+            assert max(d.y + 4 for d in devices) - min(d.y for d in devices) <= app.canvas.size.height
+
+    asyncio.run(go())
+
+
 def test_ports_copy_command():
     app, log = asyncio.run(_session([
         "add r 6 6", "add s 5 4", "group a r1 r2", "group b r3 r4", "group c r5 r6",

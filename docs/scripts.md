@@ -78,7 +78,8 @@ cabling patterns like `mesh` for the rest.
 
 It doesn't rebuild:
 
-- positions (the layout is recomputed);
+- positions, layout mode and group orientations (the app's selected layout is
+  used when replay finishes);
 - addresses learned by DHCP or ad-hoc (re-learned when the script finishes);
 - MAC tables;
 - storms.

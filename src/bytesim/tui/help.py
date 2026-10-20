@@ -16,6 +16,7 @@ HELP = """\
   [cyan]multicast[/] <src> <ids|groups|all> one packet, copied where paths split, e.g. [i]mcast c1 pcs c8[/]
   [cyan]group[/] <name> <id|group ...>      logical layer; groups nest, e.g. [i]group dc1 fab1 rfab1[/]
   [cyan]group[/] <name>  or  <name>         select a group (arrows / drag its frame move everything in it)
+  [cyan]group[/] <name> layout=vertical|horizontal|auto   orient the selected layout inside this group
   [cyan]ungroup[/] <name> \\[member ...]      take members out, or dissolve (members move up a level)
   [cyan]clone[/] <group> \\[new-name]          copy a group: devices, nested groups, internal cables
   [cyan]ports copy[/] <group>(old, …) <group>(new, …)   cable an existing group the way another is cabled, e.g.
@@ -27,6 +28,9 @@ HELP = """\
   [cyan]export[/] <file.yaml> \\[ports]          declarative topology (load reads it back); ports = exact
   [cyan]export script[/] \\[readable|shortest|explicit] \\[file]   the commands that rebuild this network
   [cyan]run[/] <file>                       run a script of commands (after [cyan]clear[/] for an export)
+  [cyan]layout[/] \\[layered|tree|circular|grid|compact|compact-layered] \\[auto|horizontal|vertical]
+                                    either or both, in any order; compact-layered keeps layers with tighter gaps
+                                    orientation preserves the layout's structure; [cyan]layout list[/] shows choices
   [cyan]groups[/] · [cyan]auto[/] (re-arrange) · [cyan]list[/] · [cyan]demo[/] · [cyan]clear[/] · [cyan]save[/]/[cyan]load[/] \\[file] · [cyan]quit[/]
   [cyan]traffic on[/] \\[packets/s] \\[seed=N] \\[hosts=group] \\[mix=unicast,internet,broadcast]   random traffic
   [cyan]traffic[/] (statistics) · [cyan]traffic rate[/] <n> · [cyan]traffic reset[/] · [cyan]traffic off[/]

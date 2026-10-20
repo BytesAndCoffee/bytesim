@@ -79,7 +79,37 @@ automatically.
 
 ## Layout and moving things
 
-With **auto-arrange** on (the default), every change re-lays out the network:
+With **auto-arrange** on (the default), every change re-lays out the network
+using the selected mode. Choose one at the console:
+
+```text
+layout layered    rows by device kind (the default)
+layout tree       rows by physical cable distance from a root
+layout circular   devices and groups around a ring
+layout grid       compact rows that wrap to the canvas width
+layout compact    tighter spacing and height-based packing of group blocks
+layout compact-layered   device-kind layers with tighter spacing
+layout list       show current settings and available choices
+```
+
+`layout` accepts a layout, an orientation, or both, in either order:
+
+```text
+layout grid vertical       grid layout, filling columns before wrapping
+layout vertical grid       the same settings, in the other order
+layout horizontal          change only the layout's direction
+layout tree                change only the layout
+layout auto                use the selected layout's default direction
+```
+
+Arguments are identified by membership in the layout and orientation choices;
+at most one of each is allowed. Orientation changes the direction of the
+selected algorithm; it preserves its levels, wrapping or ring. Groups inherit
+that direction unless given an override. `auto` and `arrange` accept the same arguments. With no
+argument, all three commands re-arrange using the current settings and turn
+auto-arrange on.
+
+**Layered** keeps the original arrangement:
 
 - Gateways go on the top row, then routers, switches, and computers at the
   bottom. A chain of devices of the same kind (`r1`–`r2`, or one switch
@@ -88,10 +118,72 @@ With **auto-arrange** on (the default), every change re-lays out the network:
   line up with what they connect to.
 - Members of a group stay together, as described below.
 
+**Tree** uses breadth-first cable distance instead of device kind. The root
+is the first gateway, or the first router, switch, then computer. Disconnected
+components get their own roots in that order. Every physical cable counts, including
+failed and control cables, so injecting a failure doesn't reshape the view.
+
+**Circular** places the outermost devices and groups clockwise around an
+ellipse. Groups move as complete blocks and use the circular layout inside
+their frames too. **Grid** packs devices and group blocks into rows or columns,
+wrapping to the canvas width or height; a block larger than that dimension
+gets a row or column of its own.
+
+**Compact** uses smaller gaps and packs blocks by height for rows or width for
+columns, filling remaining space before opening another row or column. This reduces
+wasted space when groups have different sizes. It applies inside nested groups too.
+Compact packing may change the visual order of blocks
+to fit them more closely. Device boxes and group frames retain their full size,
+with space for address labels and cables.
+
+**Compact-layered** keeps the layered graph ordering, including extra levels
+for chains of the same device kind, with smaller gaps between blocks and
+levels. Packing stays within each layer, so gateways, routers, switches and
+computers retain their hierarchy. Nested groups use the same arrangement.
+Use `layout compact-layered horizontal` or `layout vertical compact-layered`
+to choose the flow direction.
+
+**Horizontal / vertical** controls flow without flattening the network:
+
+- Layered, compact-layered and tree: levels run left to right or top to bottom;
+  branches remain.
+- Grid and compact: fill rows or columns, then wrap to the next one.
+- Circular: orient the ellipse to the canvas width or height; keep the ring.
+
+`auto` uses top-to-bottom flow for layered, compact-layered and tree, and rows or a width-based
+ellipse for the other modes. Resizing the terminal updates the available space.
+
+Every mode keeps nested groups together and makes room for their frames.
+Large networks may extend beyond the canvas; pan to see the rest. Layouts
+are deterministic and only change positions, never connectivity or routing.
+The selected mode is saved with JSON snapshots and restored by undo/redo.
+YAML topologies and exported construction scripts leave display settings out,
+along with positions.
+
+### Group orientation
+
+Choose the direction inside a group independently of the overall layout:
+
+```text
+group fab1 layout=vertical       use the layout's vertical flow inside fab1
+group fab1 layout=horizontal     use its horizontal flow inside fab1
+group fab1 layout=auto           follow the overall orientation
+group office c3 c1 c2 layout=vertical   create a group with vertical flow
+```
+
+Each group uses the selected layout algorithm, so a tree keeps its branches,
+a grid wraps, and a circular group keeps its ring. Nested groups move as
+complete blocks and can have their own orientations. Member order breaks ties
+when the layout has no other ordering rule. These options work in every layout
+mode and re-enable auto-arrange. Orientation is kept in
+JSON snapshots, undo/redo, and group clones; YAML and construction exports
+leave it out.
+
 To move things yourself, select a device and use the arrow keys (hold Shift to
 move 4 cells at a time), or drag the box with the mouse. To select a device,
 type its id on its own, press `Tab`, or click it. The first manual move turns
-auto-arrange off. Press `a` or type `auto` to turn it back on.
+auto-arrange off. Press `a` or type `auto` to turn it back on using the selected
+mode.
 
 Pan the view with `h` `j` `k` `l`, the mouse wheel (Shift+wheel scrolls
 sideways), or by dragging empty space.
@@ -99,7 +191,8 @@ sideways), or by dragging empty space.
 ## Groups
 
 A group is a named set of devices, drawn as a dashed frame with its name on
-the top edge. Devices directly in the same group share a row.
+the top edge. Members stay together and their arrangement follows the selected
+layout and orientation.
 
 ```text
 group fab1 s1 s2 s3        create fab1 (or add to it)
@@ -119,8 +212,8 @@ group site dc1 fab2
 
 - Something can belong to only one group at a time, so adding it to a new
   group moves it. A group can't end up inside itself.
-- A parent group doesn't force its subgroups onto one row. Each subgroup keeps
-  its own row, and the parent keeps its members together within every row.
+- A parent group keeps its subgroups together while each subgroup retains its
+  own internal arrangement.
 - Frames sit inside each other, and the layout pushes apart sibling frames
   that would overlap.
 - Dissolving a nested group moves its members up into its parent.
@@ -645,7 +738,7 @@ them, and a group name on its own selects the group.
 | `mesh A B`, `zip A B`, `parallel a b n`, `chain x…`, `ring x…` | | cabling patterns; a name is a device, a group (its devices in order) or `a,b,c`; `role=` applies to all |
 | `role <cable> <role>` | | change a cable's role |
 | `fail …` / `restore … \| all` | `down` / `up`, `repair` | inject or clear failures |
-| `group <name> [members]` | | create, extend or select a group |
+| `group <name> [members] [layout=auto\|horizontal\|vertical]` | | create, extend or select a group; orient the selected layout within it |
 | `ungroup <name> [members]` | | take members out, or dissolve |
 | `groups` | | the group tree |
 | `clone <group> [new-name]` | `copy`, `dup` | copy a group and its internal cables |
@@ -666,7 +759,7 @@ them, and a group name on its own selects the group.
 | `mlag <group…>`, `unmlag <group>`, `mlags` | | make a group of switches act as one (needs peer links) |
 | `stp [on\|off]`, `stp <switch…> on\|off`, `stp priority <switch> <n>` | | spanning tree |
 | `renumber [auto] bfs\|dfs [root]`, `renumber off` | `rename` | renumber ids in traversal order |
-| `auto` | `arrange`, `layout` | re-arrange and keep arranging |
+| `layout [layered\|tree\|circular\|grid\|compact\|compact-layered] [auto\|horizontal\|vertical]`, `layout list` | `auto`, `arrange` | layout and/or flow direction, in either order; no argument reuses current settings; `list` shows choices |
 | `list` | `ls` | devices, cables, groups |
 | `demo [basic\|ha\|loop\|core]` | | load a sample network |
 | `save [file]`, `load [file]` | `open` | save files; `load` also reads topologies |

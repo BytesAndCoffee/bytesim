@@ -6,7 +6,7 @@ construction script rebuilds: device ids, kinds and port counts; id counters
 order; every cable's endpoints, ports and role; HA clusters; STP, DHCP-server
 and interface settings; and which devices and cables are failed.
 
-Deliberately ignored: positions (layout is recomputed), learned addresses
+Deliberately ignored: positions and display layout settings, learned addresses
 (re-learned by DHCP and router autoconfiguration), MAC tables, STP's blocked
 ports (recomputed), storms, and the order groups were created in.
 """

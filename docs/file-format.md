@@ -8,6 +8,8 @@ template-based YAML format, see [topology-format.md](topology-format.md).
 
 ```json
 {
+  "layout_mode": "layered",
+  "group_orientation": "auto",
   "counters": { "g": 1, "r": 2, "s": 3, "c": 10 },
   "devices": [
     { "kind": "r", "num": 1, "nports": 6, "x": 64, "y": 1, "up": true }
@@ -16,6 +18,7 @@ template-based YAML format, see [topology-format.md](topology-format.md).
     { "a": "r1", "pa": 5, "b": "r2", "pb": 5, "role": "control", "up": true }
   ],
   "groups":   { "dc1": ["fab1", "rfab1"], "rfab1": ["r1", "r2"], "fab1": ["s1", "s2"] },
+  "group_layouts": { "fab1": "vertical" },
   "clusters": { "rfab1": "witness" },
   "cluster_modes": { "rfab1": "active-passive" },
   "ifaces": {
@@ -31,10 +34,13 @@ template-based YAML format, see [topology-format.md](topology-format.md).
 
 | Key | Meaning |
 |---|---|
+| `layout_mode` | selected arrangement: `layered`, `tree`, `circular`, `grid`, `compact` or `compact-layered` (absent in older files: `layered`). Positions are still restored exactly; auto-arrange starts off when opening a snapshot |
+| `group_orientation` | layout flow direction, inherited by groups: `auto`, `horizontal` or `vertical` (absent in older files: `auto`). Preserves the selected algorithm's structure. Explicit `group_layouts` entries override direction within a group |
 | `counters` | the last number used for each kind, so ids are never reused |
 | `devices[]` | `kind` (`g`/`r`/`s`/`c`) and `num` make the id (`r1`). Also `nports`, canvas position `x`/`y`, and `up` (false = failed) |
 | `links[]` | two ends (`a`/`pa`, `b`/`pb`; ports start at 1), `role` (`data`, `control`, `control-backup`, `fabric`) and `up` |
 | `groups` | group → members, in order. A member is a device id or another group's name (groups nest) |
+| `group_layouts` | group → `horizontal` or `vertical`, orienting the selected algorithm inside that group (absent: follow `group_orientation`). Entries for missing groups are dropped |
 | `clusters` | groups that are HA clusters → split policy (`none`, `quorum`, `witness`) |
 | `cluster_modes` | clusters where only the active member forwards → `active-passive` (absent: active-active) |
 | `ifaces` | `"device:port"` → address config. `mode`: `dhcp`, `adhoc`, `static`, `auto` (routers) or `none`. `net`/`host`: the address. `gw`: the gateway's host number on the same network (254 = cluster virtual gateway). `via`: how the current address was obtained |

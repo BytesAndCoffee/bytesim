@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from ...constants import CLUSTER_MODES, POLICIES, VIP_HOST
 from ...model import NetError, fmt
+from ...model.layout import ORIENTATIONS
 from ..theme import HA_COLOR, group_color
 from .base import CommandHost
 from .registry import command
@@ -27,17 +28,29 @@ class GroupCommands(CommandHost):
     def cmd_group(self, args: list[str], opts: dict[str, str]) -> None:
         net = self.net
         if not args:
+            if "layout" in opts:
+                raise NetError("usage: group <name> [members…] layout=auto|horizontal|vertical")
             self.dispatch(["groups"])
             return
+        orientation = opts.get("layout")
+        if orientation is not None and orientation not in ORIENTATIONS:
+            raise NetError("group layout must be auto, horizontal or vertical")
         name = args[0].lower()
         if len(args) == 1:
             if name not in net.groups:
                 raise NetError(f"no such group: {name} (create one with group {name} <ids...>)")
+            if orientation is not None:
+                net.set_group_layout(name, orientation)
+                self.arrange()  # type: ignore[attr-defined]
+                self.log_msg(f"group {name} layout: [b]{orientation}[/]")
             self.canvas.select_group(name)
             self.canvas.focus()
             return
         name = net.resolve_group_name(name)          # fab(1) → the next free fabN
         moved = net.group_add(name, self._members(args[1:]))
+        if orientation is not None:
+            net.set_group_layout(name, orientation)
+            self.auto = True
         if moved:
             self.log_msg(f"[dim]moved {' '.join(moved)} out of their old group[/]")
         self.log_msg(f"[{group_color(name)}]▣ group {name}[/]: {self._group_text(name)}")
