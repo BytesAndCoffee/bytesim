@@ -235,7 +235,7 @@ class TrafficCommands(CommandHost):
             return len(legs) - 1
         return sum(1 for d, _ in path[1:-1] if self.net.is_router(d))
 
-    @command("ping", "trace", "tracert", "traceroute")
+    @command("ping", "tracert", "traceroute")
     def cmd_ping(self, args: list[str], opts: dict[str, str]) -> None:
         if len(args) >= 2 and (args[0].lower() in ("all", "*") or len(args) > 2 or args[1].lower() in ("all", "*")
                                or args[1].lower() in self.net.groups):
@@ -250,11 +250,15 @@ class TrafficCommands(CommandHost):
         try:
             label, path, legs, internet = self._plan(src, args[1])
         except NetError as e:
+            if self.trace_enabled:
+                self._log_path_trace_failure("REQUEST", src, args[1], e)
             raise NetError(f"ping {src} → {args[1]}: {e}") from None
         if len(path) < 2:
             self.log_msg(f"[green]{src} is a gateway: internet reachable directly[/]")
             return
         self._log_route("PING", "red", src, label, path, legs, internet)
+        if self.trace_enabled:
+            self._log_path_trace("REQUEST", src, label, path, legs, internet=internet)
         self._learn(legs, both_ways=True)
         back = self._reverse(path)
         c = self.canvas
@@ -265,6 +269,10 @@ class TrafficCommands(CommandHost):
 
         def arrived() -> None:
             c.flash_device(path[-1][0], "red")
+            if self.trace_enabled:
+                back_legs = [(b, a, self._reverse(p)) for a, b, p in reversed(legs)] if legs else None
+                self._log_path_trace("REPLY", label, src, back, back_legs,
+                                      dst_iface=legs[0][0] if legs else None)
             c.send_packet(self._cells(back), "green", replied)
 
         def replied() -> None:
@@ -308,10 +316,14 @@ class TrafficCommands(CommandHost):
         try:
             label, path, legs, internet = self._plan(src, args[1])
         except NetError as e:
+            if self.trace_enabled:
+                self._log_path_trace_failure("UNICAST", src, args[1], e)
             raise NetError(f"unicast {src} → {args[1]}: {e}") from None
         if len(path) < 2:
             raise NetError(f"{src} is a gateway: nothing to send through")
         self._log_route("UNICAST", "#ffaf00", src, label, path, legs, internet)
+        if self.trace_enabled:
+            self._log_path_trace("UNICAST", src, label, path, legs, internet=internet)
         self._learn(legs)
         c = self.canvas
         links = [li for _, li in path[1:]]
@@ -366,7 +378,32 @@ class TrafficCommands(CommandHost):
         self._multicast(args)
 
     def _show_detail(self, bulk: bool = False) -> bool:
-        return not bulk
+        return not bulk if self.detail_enabled is None else self.detail_enabled
+
+    def _log_path_trace(self, phase: str, src: str, target: str,
+                         path: list[tuple[str, int]], legs: list[Leg] | None, *,
+                         dst_iface: tuple[str, int] | None = None, internet: bool = False) -> None:
+        """Describe the chosen physical cables without running another route query."""
+        net = self.net
+        hops = []
+        for (u, _), (v, li) in zip(path, path[1:]):
+            link = net.links[li]
+            a, b = self._ifname((u, link.port_of(u))), self._ifname((v, link.port_of(v)))
+            hops.append(f"{a} -{link.role}#{li + 1}-> {b}")
+        endpoints = ""
+        if legs:
+            a = legs[0][0]
+            if internet:
+                destination = "internet"
+            else:
+                b = dst_iface if dst_iface is not None else self._last_dst
+                destination = f"{self._ifname(b)} {fmt(net.addr_of(b))}"
+            endpoints = f" · endpoints {self._ifname(a)} {fmt(net.addr_of(a))} → {destination}"
+        self.log_msg(f"[b cyan]TRACE {phase}[/] {escape(src)} → {escape(target)}{endpoints}\n"
+                     f"  {escape(' | '.join(hops))}")
+
+    def _log_path_trace_failure(self, phase: str, src: str, target: str, error: NetError) -> None:
+        self.log_msg(f"[b red]TRACE {phase} FAILED[/] {escape(src)} → {escape(target)}: {escape(str(error))}")
 
     @command("mping", "mcastping", "multicast-ping")
     def cmd_mping(self, args: list[str], opts: dict[str, str]) -> None:
@@ -389,7 +426,7 @@ class TrafficCommands(CommandHost):
             bulk = pairs >= self.BULK_PAIRS
             self.log_msg(f"[b bright_magenta]MULTICAST PING FROM ALL[/]: {len(sources)} senders · {pairs} requests"
                          + (" · whole network" if whole_network else "")
-                         + (" · summaries" if not self._show_detail(bulk) else ""))
+                         + (" · summaries (use `detail on` for every reply)" if not self._show_detail(bulk) else ""))
 
             def batch():
                 for src in sources:
@@ -432,9 +469,13 @@ class TrafficCommands(CommandHost):
             try:
                 _, path, legs, _ = self._plan(src, d)
             except NetError as e:
+                if self.trace_enabled:
+                    self._log_path_trace_failure("REQUEST", src, d, e)
                 lost.append(f"{d} ({e})")
                 yield
                 continue
+            if self.trace_enabled:
+                self._log_path_trace("REQUEST", src, d, path, legs)
             self._learn(legs)
             paths[d] = path
             if legs:
@@ -507,11 +548,15 @@ class TrafficCommands(CommandHost):
                 net.get(src)
                 _, back, legs, _ = self._plan(dst_id, reply_targets[dst])
             except NetError as e:
+                if self.trace_enabled:
+                    self._log_path_trace_failure("REPLY", dst, src, e)
                 reply_failures.append(dst)
                 if detailed() or len(reply_failures) <= 5:
                     self.log_msg(f"  [red]✗ no reply from {dst} to {src}: {escape(str(e))}[/]")
                 finished()
                 return
+            if self.trace_enabled:
+                self._log_path_trace("REPLY", dst, src, back, legs)
             self._learn(legs)
             if detailed():
                 self._log_route("ECHO REPLY", "green", dst_id, src, back, legs, False)

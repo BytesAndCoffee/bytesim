@@ -20,6 +20,10 @@ def build_parser() -> argparse.ArgumentParser:
                    help="a console command to run at startup (repeatable)")
     p.add_argument("--log-file", metavar="FILE", type=Path,
                    help="append console output to a plain UTF-8 log file")
+    p.add_argument("--trace", action=argparse.BooleanOptionalAction, default=False,
+                   help="enable full routed-packet path traces for the session")
+    p.add_argument("--detail", action=argparse.BooleanOptionalAction, default=None,
+                   help="enable or suppress detailed packet output (default: automatic)")
     p.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     return p
 
@@ -41,7 +45,7 @@ def main(argv: list[str] | None = None) -> None:
     startup = ([f"demo {args.demo}"] if args.demo else []) + args.run
     # A topology carries no positions, so it starts auto-arranged.
     ByteSimApp(network=network, startup=startup, auto=True if topology else None,
-               log_file=args.log_file).run()
+               log_file=args.log_file, trace=args.trace, detail=args.detail).run()
 
 
 if __name__ == "__main__":

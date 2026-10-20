@@ -179,7 +179,7 @@ def test_a_storm_discovered_during_preparation_cancels_safely(monkeypatch):
     asyncio.run(go())
 
 
-def test_bulk_summaries_count_failures():
+def test_bulk_summaries_count_failures_and_detail_can_be_enabled():
     r = ScriptRunner(network())
     r.net.devices["c12"].up = False
     r.run("mping all all")
@@ -187,6 +187,13 @@ def test_bulk_summaries_count_failures():
     assert len(summaries) == 12
     assert sum("10/11 replies, 1 failed" in m for m in summaries) == 11
     assert sum("0/11 replies, 11 failed" in m for m in summaries) == 1
+    r.log.clear()
+    r.net.devices["c12"].up = True
+    r.run("detail on\nmping all all")
+    assert sum("reply from" in m for m in r.log) == 132
+    assert sum("11/11 replies, 0 failed" in m for m in r.log) == 12
+    with pytest.raises(NetError, match="usage: detail"):
+        r.run("detail maybe")
 
 
 def test_routing_indexes_and_query_results_do_not_survive_changes():

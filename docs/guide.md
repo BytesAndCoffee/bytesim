@@ -45,7 +45,8 @@ Use `tee` to copy new console output to a file while keeping it visible:
 
 ```text
 tee traffic.log              start appending to a file
-mping c1 c4 c6              capture its requests and replies
+detail on                   enable detailed output for the session
+mping all all               capture every reply and ARP line
 tee                         show the active file (or off)
 tee off                     stop file logging
 ```
@@ -53,7 +54,8 @@ tee off                     stop file logging
 Files contain plain UTF-8 text without Rich colours or console wrapping. Each
 message is flushed so another terminal can follow it with `tail -f traffic.log`.
 Existing content is retained. Capture includes later packet replies and errors;
-it starts when enabled and does not copy earlier console history.
+it starts when enabled and does not copy earlier console history. `detail on`
+still controls multicast verbosity in both the console and the file.
 
 Relative paths use ByteSim's working directory, `~` expands to your home
 directory, and paths with spaces may be quoted. `tee <another-file>` switches
@@ -413,6 +415,7 @@ mping all all              every computer pings every other computer
 mping all all *            every ping-capable device pings every other one
 mping all c1 *             routers, gateways and computers each ping c1
 mping c1 r1:p2             probe a specific router interface
+detail on                  include every reply and ARP in subsequent commands
 ping c1 all                multicast ping to every other computer
 ping c1 office             multicast ping to members of a group
 unicast c2 c7              one-way packet (orange)
@@ -501,6 +504,51 @@ interface/address and selected destination interface/address. A router's selecte
 address can be reached through another interface on that router; the destination
 address and physical ingress port need not be the same.
 
+Trace and detail are global session settings. For full request and return paths:
+
+```text
+trace on
+detail off
+mping c1 c6
+mping all all *
+```
+
+Each receiver gets a `TRACE REQUEST` and a `TRACE REPLY`, identifying the sender
+and target, addressed endpoints, and every physical cable hop, including switches.
+For example, `r1:p2 -fabric#3-> r2:p1` means the selected cable is link 3 (its
+one-based position in the network's cable list), carrying fabric traffic from
+router 1 port 2 to router 2 port 1. Successive hops show each transit device's
+ingress and egress ports, including the chosen LAG member. Endpoint addresses
+are omitted in graph mode.
+
+Request traces describe routes selected during preparation; reply traces appear
+when requests arrive and their return routes are calculated. Failed route queries
+produce `TRACE REQUEST FAILED` or `TRACE REPLY FAILED` with the reason. Traces
+describe forwarding decisions; the reply summaries count completed deliveries.
+
+`trace off` is the default. `trace` and `detail` are independent: use
+`trace on` with `detail off` for full paths and per-sender summaries, or use
+`detail on` for the existing ARP and reply diagnostics too. `detail auto` is the
+default: small actions show details, while large multicast batches summarize.
+`trace` and `detail` without arguments show their current values. Changes affect
+subsequent output immediately, including preparation and replies already in flight;
+queued actions use the settings active when resumed. The inspector displays both
+settings. They persist across network loads, clears and undo/redo, independently
+of saved networks. Tracing also applies to ordinary ping, unicast and one-way
+multicast. `traceroute` and `tracert` remain ping aliases; `trace` controls output.
+
+Startup flags set the same preferences:
+
+```sh
+bytesim mynet.json --trace --no-detail --log-file paths.log
+```
+
+Use `--detail` for full diagnostics, `--no-detail` for concise output, and
+`--no-trace` to disable paths. Per-command `trace=` and `detail=` options are
+rejected with guidance to use the global settings. Tracing works with groups, all
+senders, the whole-network `*` modifier, aliases and paused queues. Use
+`tee paths.log` to save the same traces as plain text.
+
 Batches of 128 or more source/receiver pairs prepare routes in short slices
 while the UI remains responsive. Requests wait at position zero until the whole
 batch is ready, then leave together. Return-route calculations also yield between
@@ -510,7 +558,8 @@ in-flight packets so their paths cannot reference an older topology.
 
 Large batches default to one reply/failure summary per sender instead of logging
 every packet and ARP. All pairs still run, with real return routes and MAC
-learning. Summaries count every failure; summary mode shows at most five
+learning. Use `detail on` to show every reply, or `detail off` to summarize a
+smaller batch. Summaries count every failure; summary mode shows at most five
 individual request errors and five return-route errors per sender.
 
 The request shares cables until its paths split, just like ordinary multicast.
@@ -884,8 +933,10 @@ them, and a group name on its own selects the group.
 | `ip [id[:port]] [addr [gw] \| dhcp \| adhoc \| none]` | | show or set addresses |
 | `dhcp`, `release`, `adhoc <id[:nic]\|all>` | | client address control |
 | `dhcpd <router> [on\|off]` | | router DHCP server |
-| `ping <src> <dst…>` | `trace`, `tracert`, `traceroute` | echo and reply; groups, `all` or several destinations use multicast |
+| `ping <src> <dst…>` | `tracert`, `traceroute` | echo and reply; groups, `all` or several destinations use multicast |
 | `mping <src\|all> <id\|addr\|group\|all> … [*]` | `mcastping`, `multicast-ping` | shared echo requests and replies; trailing `*` expands eligibility |
+| `trace [on\|off]` | | global full-path output; no argument shows status |
+| `detail [on\|off\|auto]` | | global diagnostic verbosity; auto adapts to batch size; no argument shows status |
 | `unicast <src> <dst>` | `ucast`, `send` | one-way packet |
 | `multicast <src> <dst…>` | `mcast` | one-to-many packet |
 | `mode graph\|addr` | | graph or address mode |

@@ -41,6 +41,9 @@ class Interpreter(CommandHost):
         if not toks:
             raise NetError("missing command")
         word, args = toks[0].lower(), toks[1:]
+        for setting in ("trace", "detail"):
+            if setting in opts:
+                raise NetError(f"{setting} is a global setting; use `{setting} on` or `{setting} off` separately")
 
         if REF.match(toks[0]):
             if len(toks) == 1:

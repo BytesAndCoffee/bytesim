@@ -16,6 +16,27 @@ class ConsoleCommands(CommandHost):
     tee_path: Path | None = None
     _tee_stream: TextIO | None = None
 
+    def _output_setting(self, name: str, args: list[str], *, auto: bool = False) -> None:
+        choices = ("on", "off", "auto") if auto else ("on", "off")
+        if len(args) > 1 or (args and args[0].lower() not in choices):
+            raise NetError(f"usage: {name} [{'|'.join(choices)}]")
+        field = f"{name}_enabled"
+        if args:
+            value = args[0].lower()
+            setattr(self, field, None if value == "auto" else value == "on")
+        current = getattr(self, field)
+        value = "auto" if current is None else "on" if current else "off"
+        self.log_msg(f"{name}: [b]{value}[/]")
+        self.refresh_sidebar()
+
+    @command("trace")
+    def cmd_trace(self, args: list[str], opts: dict[str, str]) -> None:
+        self._output_setting("trace", args)
+
+    @command("detail")
+    def cmd_detail(self, args: list[str], opts: dict[str, str]) -> None:
+        self._output_setting("detail", args, auto=True)
+
     @command("tee")
     def cmd_tee(self, args: list[str], opts: dict[str, str]) -> None:
         if not args:

@@ -40,7 +40,7 @@ src/bytesim/
     └── commands/
         ├── registry.py  @command decorator, collect()
         ├── base.py      CommandHost: what handlers may use
-        ├── console.py   console tee
+        ├── console.py   global trace/detail settings and console tee
         ├── topology.py  add, link, del, ports, role, fail, files, mode…
         ├── groups.py    group, ungroup, clone, cluster…
         ├── addressing.py ip, dhcp, release, adhoc, dhcpd (+ animated DHCP)
@@ -171,7 +171,8 @@ source interface and starts a separate reply animation. Completion counts
 replies and failures, and releases the request and reply cable highlights.
 Completed packets are partitioned in linear time, with callbacks queued and
 drained under the same work budget. `busy` includes preparation and callback
-backlogs. Large batches default to per-source summaries; all simulation work still runs.
+backlogs. Large batches default to per-source summaries, with global `detail on` for
+full per-reply/ARP output; all simulation work still runs.
 The shared handlers also run with the headless `ScriptRunner`.
 
 `mping`'s trailing `*` modifier expands `all` selectors to addressed non-switch
@@ -180,6 +181,25 @@ accounting. Wildcards select devices once, while explicit address/port targets
 normalize to `device:port` so interface choices survive multicast expansion.
 Device-wide targets use the cheapest interface route, breaking ties by port
 number; detailed request logs expose the chosen source and destination addresses.
+
+Global `trace on` formats the existing planned paths without issuing additional
+route queries. Each phase records its addressed endpoints and directed cable
+hops with physical ports, roles and one-based link numbers. Requests are traced
+between preparation yields; return paths are traced inside the arrival callback
+after fresh routing. Failures identify their phase and reason. Trace output is
+independent of `detail`, uses the normal console/tee pipeline, and follows the
+same work scheduling and cancellation policy as the packets.
+
+`CommandHost.trace_enabled` and `detail_enabled` are session preferences.
+`None` for detail selects automatic batch-size-based verbosity. `ConsoleCommands`
+provides the setters and status queries; the inspector shows them. Packet planning
+and callbacks read the current flags when emitting output, so toggles affect
+preparation and in-flight replies immediately. They survive network replacement
+and history restoration and are excluded from saved networks and undo steps.
+The app and `ScriptRunner` constructors accept `trace`/`detail` defaults; CLI
+`--trace`/`--no-trace` and `--detail`/`--no-detail` initialize the same fields.
+The interpreter rejects per-command `trace=`/`detail=` options before dispatch
+or queueing. Explicit ping, unicast and multicast use these shared settings.
 
 `ConsoleCommands` owns a session-only tee stream. Both hosts' `log_msg()` methods
 copy their console messages through `write_console_log()`, stripping Rich markup

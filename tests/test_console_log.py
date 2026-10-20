@@ -115,6 +115,7 @@ def test_real_app_tee_captures_later_replies_errors_and_closes_on_exit(tmp_path)
             before = app.net.to_json()
             app.run_command("tee")
             assert app.net.to_json() == before and len(app.undo_stack) == 1
+            app.run_command("detail on")
             app.run_command("mping c1 c2 c6")
             for _ in range(1000):
                 if not app.canvas.busy:

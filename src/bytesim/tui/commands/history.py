@@ -19,7 +19,7 @@ from .registry import command
 
 UNDO_LIMIT = 100
 MOVE_BURST = 2.0          # seconds: moves closer together than this are one step
-NOT_RECORDED = {"undo", "redo", "history", "tee"}
+NOT_RECORDED = {"undo", "redo", "history", "tee", "trace", "detail"}
 
 
 @dataclass

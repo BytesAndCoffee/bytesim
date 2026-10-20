@@ -4,6 +4,13 @@
 
 First release.
 
+- Global `trace on/off` and `detail on/off/auto` settings, with matching startup
+  flags. They apply to subsequent output, including in-flight replies, persist
+  across network loads and are visible in the inspector.
+- Optional `trace on`: full per-receiver request and independently routed
+  reply paths with ports, cable roles, link numbers, endpoint addresses and
+  failure reasons. Works with summaries, whole-network batches, queues and tee logs.
+
 - Packet animation targets 60 fps, preserving normal playback duration, arrival
   flashes and storm effect timing.
 
@@ -50,7 +57,8 @@ First release.
   Explicit interface/address targets survive multicast expansion; detailed logs
   show selected endpoints, with deterministic shortest-route/lowest-port selection.
 - Large multicast batches prepare and process arrivals in bounded work slices,
-  with simultaneous request starts, pause support and per-sender summaries. Network/layout edits cancel obsolete packet work.
+  with simultaneous request starts, pause support and per-sender summaries
+  (`detail on` for full logs). Network/layout edits cancel obsolete packet work.
   Scoped port/adjacency indexes, per-route query caches, reused cable geometry
   and linear-time packet completion reduce all-to-all overhead.
 - Cable roles (data, control, fabric) and failure injection.

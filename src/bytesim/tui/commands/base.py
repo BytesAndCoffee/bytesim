@@ -18,6 +18,8 @@ class CommandHost:
     graph: bool
     animation_speed: float = 1.0  # session playback multiplier, independent of traffic rate
     paused: bool = False
+    trace_enabled: bool = False
+    detail_enabled: bool | None = None  # None: automatic verbosity based on batch size
     replaying: int = 0          # > 0 while a script runs (hosts may batch their side effects)
     headless: bool = False      # True for the screenless ScriptRunner
 

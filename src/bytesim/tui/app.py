@@ -46,14 +46,18 @@ class ByteSimApp(ConsoleCommands, TopologyCommands, GroupCommands, AddressComman
     AUTO_FOCUS = "#cmd"
 
     def __init__(self, network: Network | None = None, startup: list[str] | None = None,
-                 auto: bool | None = None, log_file: str | Path | None = None) -> None:
+                 auto: bool | None = None, log_file: str | Path | None = None,
+                 trace: bool = False, detail: bool | None = None) -> None:
         """``network`` starts the app on an existing model; ``startup`` commands run once mounted.
         ``auto`` turns auto-arrange on or off (default: on, unless a network with its own
-        positions is given). ``log_file`` appends console output from startup."""
+        positions is given). ``log_file`` appends console output from startup;
+        ``trace`` and ``detail`` initialize session output settings."""
         super().__init__()
         self.net = network or Network()
         self.auto = (network is None) if auto is None else auto
         self.graph = False              # graph-only mode: connectivity without addressing
+        self.trace_enabled = trace
+        self.detail_enabled = detail
         self._startup = startup or []
         self._log_file = log_file
         self._ha_seen: dict = {}
@@ -161,7 +165,8 @@ class ByteSimApp(ConsoleCommands, TopologyCommands, GroupCommands, AddressComman
         self.query_one("#info", Static).update(
             render_inspector(self.net, c.selected, c.selected_group, self.graph, self.auto,
                              self.naming_text(), self.traffic, paused=self.paused,
-                             queued=len(self.pending_actions), preparing=c.preparing))
+                             queued=len(self.pending_actions), preparing=c.preparing,
+                             trace=self.trace_enabled, detail=self.detail_enabled))
 
     # ---- the command line ----------------------------------------------
     def on_input_submitted(self, event: Input.Submitted) -> None:

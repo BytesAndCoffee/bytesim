@@ -292,7 +292,7 @@ def test_whole_network_without_computers_and_with_no_pingable_devices():
 
 def test_whole_network_mode_can_be_paused_and_queued():
     r = mixed_network()
-    r.run("pause\nmping all all *")
+    r.run("detail on\npause\nmping all all *")
     assert len(r.pending_actions) == 1 and r.pending_actions[0] == ["mping", "all", "all", "*"]
     r.run("resume")
     assert log_text(r).count("multicast ping: 3/3 replies, 0 failed") == 4

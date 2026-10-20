@@ -63,10 +63,13 @@ class ScriptRunner(ConsoleCommands, TopologyCommands, GroupCommands, AddressComm
                    SwitchingCommands, Interpreter):
     """A headless ByteSim: feed it commands, read back ``net``."""
 
-    def __init__(self, network: Network | None = None) -> None:
+    def __init__(self, network: Network | None = None, *, trace: bool = False,
+                 detail: bool | None = None) -> None:
         self.net = network or Network()
         self.auto = False
         self.graph = False
+        self.trace_enabled = trace
+        self.detail_enabled = detail
         self.replaying = 1            # always "in a script": no per-command side effects
         self.headless = True
         self.naming = None
