@@ -11,7 +11,11 @@ HELP = """\
   [cyan]ports[/] <id…> <n>                 change port / NIC count, e.g. [i]ports s4 s6 8[/]
   [cyan]mesh[/] A B · [cyan]zip[/] A B · [cyan]parallel[/] a b n · [cyan]chain[/] x… · [cyan]ring[/] x…   cabling patterns
                                     A name is a device, a group or a,b,c, e.g. [i]mesh fab1 g1,g2,r2[/], [i]ring fab1[/]
-  [cyan]ping[/] <id> <id|addr|internet>    echo request + reply (follows networks + gateways)
+  [cyan]ping[/] <id> <id|addr|internet|group|all> \\[dest…]   echo request + reply; several receivers = multicast
+  [cyan]mping[/] <src|all> <ids|groups|all> \\[*]  shared requests + replies; [i]mping all all *[/] includes routers/gateways
+                                    also [cyan]mcast ping[/]; global [cyan]detail on[/] logs every reply
+                                    global [cyan]trace on[/] shows full paths with ports, cable roles and link numbers
+                                    bare device targets choose fewest hops, then lowest port; [cyan]r1:p2[/] selects an interface
   [cyan]unicast[/] <src> <id|addr>         one-way packet to a single device
   [cyan]multicast[/] <src> <ids|groups|all> one packet, copied where paths split, e.g. [i]mcast c1 pcs c8[/]
   [cyan]group[/] <name> <id|group ...>      logical layer; groups nest, e.g. [i]group dc1 fab1 rfab1[/]
@@ -34,6 +38,11 @@ HELP = """\
   [cyan]groups[/] · [cyan]auto[/] (re-arrange) · [cyan]list[/] · [cyan]demo[/] · [cyan]clear[/] · [cyan]save[/]/[cyan]load[/] \\[file] · [cyan]quit[/]
   [cyan]traffic on[/] \\[packets/s] \\[seed=N] \\[hosts=group] \\[mix=unicast,internet,broadcast]   random traffic
   [cyan]traffic[/] (statistics) · [cyan]traffic rate[/] <n> · [cyan]traffic reset[/] · [cyan]traffic off[/]
+  [cyan]speed[/] \\[slow|normal|fast|0.1..10]   60 fps packet animation (normal = 1x; no argument shows it)
+  [cyan]pause[/] · [cyan]resume[/] ([cyan]play[/])          freeze playback, queue packet actions, then launch them together
+  [cyan]queue[/] · [cyan]queue clear[/]               inspect or discard queued actions
+  [cyan]tee[/] <file> · [cyan]tee[/] · [cyan]tee off[/]        append console output to a plain text file; show status or stop
+  [cyan]trace[/] \\[on|off] · [cyan]detail[/] \\[on|off|auto]   global output settings; no argument shows status
 [b]Addressing[/]  an address is (network, host): network id + 8-bit host, e.g. [i](2,14)[/]
   MACs name the physical port: R1A = r1 port 1. A network spans every switch it touches.
   Routers/gateways take host 1, 2… on each network and serve DHCP; computers lease hosts 10+,

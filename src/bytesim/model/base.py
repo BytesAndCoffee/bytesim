@@ -8,6 +8,9 @@ from .types import Device, Iface, Link, NetError
 class NetworkBase:
     """Holds the network's state. The mixins in this package add behaviour on top."""
 
+    _memo: dict | None = None  # populated only inside remembering()
+    _route_memo: dict | None = None  # read-only results, only during a single route()
+
     def __init__(self) -> None:
         self.layout_mode = "layered"             # display arrangement; saved with positions
         self.group_orientation = "auto"          # layout direction; child groups inherit it
@@ -42,16 +45,35 @@ class NetworkBase:
         return sorted(self.devices.values(), key=lambda d: (RANK[d.kind], d.num))
 
     def link_on(self, dev_id: str, port: int) -> Link | None:
-        for l in self.links:
-            if (l.a == dev_id and l.pa == port) or (l.b == dev_id and l.pb == port):
-                return l
-        return None
+        i = self.link_index(dev_id, port)
+        return self.links[i] if i is not None else None
 
     def link_index(self, dev_id: str, port: int) -> int | None:
+        if self._memo is not None:
+            if "ports" not in self._memo:
+                ports = {}
+                for i, l in enumerate(self.links):
+                    ports.setdefault((l.a, l.pa), i)
+                    ports.setdefault((l.b, l.pb), i)
+                self._memo["ports"] = ports
+            return self._memo["ports"].get((dev_id, port))
         for i, l in enumerate(self.links):
             if (l.a == dev_id and l.pa == port) or (l.b == dev_id and l.pb == port):
                 return i
         return None
+
+    def adjacent_links(self, dev_id: str) -> list[tuple[int, Link]]:
+        """Cables touching a device, in original cable order. Liveness stays live."""
+        if self._memo is None:
+            return [(i, l) for i, l in enumerate(self.links) if l.touches(dev_id)]
+        if "adjacency" not in self._memo:
+            adjacency: dict[str, list[tuple[int, Link]]] = {}
+            for i, l in enumerate(self.links):
+                adjacency.setdefault(l.a, []).append((i, l))
+                if l.b != l.a:
+                    adjacency.setdefault(l.b, []).append((i, l))
+            self._memo["adjacency"] = adjacency
+        return self._memo["adjacency"].get(dev_id, [])
 
     def free_port(self, dev: Device) -> int | None:
         for p in range(1, dev.nports + 1):

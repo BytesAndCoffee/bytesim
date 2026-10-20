@@ -15,6 +15,19 @@ repeat, it builds one part and **reuses** it with `clone`, `copy` or
 `ports copy`. Reading the script shows the network's patterns: "fab3 is fab1
 again, cabled the same way to gate2 and rfab2".
 
+Console logging uses `tee traffic.log` and `tee off`, or the startup option
+`--log-file traffic.log`. It records new visible output, including later packet
+replies. The app suppresses per-command output while replaying `run` scripts,
+so that output is also absent from its tee. The headless `ScriptRunner` records
+its normal messages to the tee; use it as a context manager to close the file:
+
+```python
+from bytesim.scripting import ScriptRunner
+
+with ScriptRunner() as runner:
+    runner.run("tee build.log\nadd r 4\nadd c")
+```
+
 ## Three ways to save a network
 
 | | `save` (JSON) | `export` (YAML topology) | `export script` (commands) |
@@ -152,3 +165,8 @@ already happened.
 
 Scripts aren't only for exports. You can write your own lab setups, or keep a
 list of commands to repeat.
+
+On an already configured network, scripts can also batch packet actions with
+`pause`, several `ping` / `mping` / `unicast` commands, then `resume`. Requests
+start together on the next animation tick. Leaving out `resume` keeps them
+queued for inspection with `queue`.

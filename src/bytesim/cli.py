@@ -1,4 +1,4 @@
-"""Command-line entry point: ``bytesim [FILE] [--demo NAME] [--run CMD ...]``."""
+"""Command-line entry point: ``bytesim [FILE] [--demo NAME] [--run CMD] [--log-file FILE]``."""
 from __future__ import annotations
 
 import argparse
@@ -18,6 +18,12 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--demo", choices=["basic", "ha", "loop", "core"], help="start with a sample network")
     p.add_argument("--run", "-c", metavar="CMD", action="append", default=[],
                    help="a console command to run at startup (repeatable)")
+    p.add_argument("--log-file", metavar="FILE", type=Path,
+                   help="append console output to a plain UTF-8 log file")
+    p.add_argument("--trace", action=argparse.BooleanOptionalAction, default=False,
+                   help="enable full routed-packet path traces for the session")
+    p.add_argument("--detail", action=argparse.BooleanOptionalAction, default=None,
+                   help="enable or suppress detailed packet output (default: automatic)")
     p.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     return p
 
@@ -38,7 +44,8 @@ def main(argv: list[str] | None = None) -> None:
             sys.exit(f"bytesim: couldn't open {args.file}: {e}")
     startup = ([f"demo {args.demo}"] if args.demo else []) + args.run
     # A topology carries no positions, so it starts auto-arranged.
-    ByteSimApp(network=network, startup=startup, auto=True if topology else None).run()
+    ByteSimApp(network=network, startup=startup, auto=True if topology else None,
+               log_file=args.log_file, trace=args.trace, detail=args.detail).run()
 
 
 if __name__ == "__main__":

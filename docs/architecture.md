@@ -40,6 +40,7 @@ src/bytesim/
     └── commands/
         ├── registry.py  @command decorator, collect()
         ├── base.py      CommandHost: what handlers may use
+        ├── console.py   global trace/detail settings and console tee
         ├── topology.py  add, link, del, ports, role, fail, files, mode…
         ├── groups.py    group, ungroup, clone, cluster…
         ├── addressing.py ip, dhcp, release, adhoc, dhcpd (+ animated DHCP)
@@ -48,7 +49,7 @@ src/bytesim/
         ├── scripting.py export script, run
         ├── history.py   undo / redo (snapshot per changing command)
         ├── interpreter.py tokens + dispatch (shared by the app and ScriptRunner)
-        └── traffic.py   ping, unicast, multicast
+        └── traffic.py   ping, multicast ping, unicast, multicast
 ```
 
 ## The model
@@ -130,10 +131,85 @@ connects in (N/E/S/W), so crossings and junctions get the right box-drawing
 character. A cell used only by control cables uses the double-line set; one
 used only by fabric cables uses the heavy set.
 
-Packets are lists of screen cells. A timer moves every packet forward one
-cell per tick and runs a callback when it arrives, which is how ping chains
-its reply. Multicast copies share cells until their paths split, so a single
-packet appears to fork.
+Structural `remembering()` scopes cache port indexes, adjacency, bundle
+membership and LAG ports, preserving cable order. They never cache liveness.
+`route_query` adds a separate result cache for segments, addressed interfaces
+and HA state during one synchronous `route()` call; it is discarded on success
+or error before any model mutation or event-loop yield. `_plan` shares structural
+indexes between routing and ARP flooding, leaving the scope before a storm
+changes the model.
+
+Packets are lists of screen cells, built from the canvas's cached cable geometry.
+A 60 fps timer moves them at a common pace
+and runs a callback on arrival, which is how ping chains its reply. The pace
+is at least 45 cells per second at normal speed and scales with the longest
+active path to finish it within 90 ticks (about 1.5 seconds at the target frame
+rate). The session's `animation_speed` multiplier changes that shared pace;
+fractional positions make slower playback smooth. `speed` accepts slow (0.5x),
+normal (1x), fast (3x), or a numeric multiplier from 0.1 to 10.
+Multicast copies share cells until their paths split, so a single packet
+appears to fork.
+
+Playback pause is session state on `CommandHost`. The shared interpreter
+queues explicit packet-command tokens before calling their handlers, preserving
+aliases and options. `resume` dispatches the batch without yielding to the
+animation timer, so every new request starts at position zero on the next tick.
+Small batches compute routes on dispatch. At 128 source/receiver pairs, multicast
+uses generators that yield between route queries and packet creation. The canvas
+drains preparation in 6 ms slices, scheduling each continuation with a positive
+timer delay to yield the event loop. Playback waits for preparation to finish,
+preserving the simultaneous start. The canvas freezes
+packet positions, callbacks, flashes and its frame clock while paused;
+`traffic_step` skips generation and load decay. The traffic timer still updates
+its time reference, preventing a catch-up burst. Network replacement and
+history restoration clear pending commands. Network/layout/mode edits cancel prepared
+and in-flight work; a snapshot comparison avoids cancelling on unchanged refreshes.
+
+Multicast ping uses the same request distribution as one-way multicast. On
+each arrival, it asks the model for a fresh return route to that request's
+source interface and starts a separate reply animation. Completion counts
+replies and failures, and releases the request and reply cable highlights.
+Completed packets are partitioned in linear time, with callbacks queued and
+drained under the same work budget. `busy` includes preparation and callback
+backlogs. Large batches default to per-source summaries, with global `detail on` for
+full per-reply/ARP output; all simulation work still runs.
+The shared handlers also run with the headless `ScriptRunner`.
+
+`mping`'s trailing `*` modifier expands `all` selectors to addressed non-switch
+devices (all nodes in graph mode), retaining configured failed devices for failure
+accounting. Wildcards select devices once, while explicit address/port targets
+normalize to `device:port` so interface choices survive multicast expansion.
+Device-wide targets use the cheapest interface route, breaking ties by port
+number; detailed request logs expose the chosen source and destination addresses.
+
+Global `trace on` formats the existing planned paths without issuing additional
+route queries. Each phase records its addressed endpoints and directed cable
+hops with physical ports, roles and one-based link numbers. Requests are traced
+between preparation yields; return paths are traced inside the arrival callback
+after fresh routing. Failures identify their phase and reason. Trace output is
+independent of `detail`, uses the normal console/tee pipeline, and follows the
+same work scheduling and cancellation policy as the packets.
+
+`CommandHost.trace_enabled` and `detail_enabled` are session preferences.
+`None` for detail selects automatic batch-size-based verbosity. `ConsoleCommands`
+provides the setters and status queries; the inspector shows them. Packet planning
+and callbacks read the current flags when emitting output, so toggles affect
+preparation and in-flight replies immediately. They survive network replacement
+and history restoration and are excluded from saved networks and undo steps.
+The app and `ScriptRunner` constructors accept `trace`/`detail` defaults; CLI
+`--trace`/`--no-trace` and `--detail`/`--no-detail` initialize the same fields.
+The interpreter rejects per-command `trace=`/`detail=` options before dispatch
+or queueing. Explicit ping, unicast and multicast use these shared settings.
+
+`ConsoleCommands` owns a session-only tee stream. Both hosts' `log_msg()` methods
+copy their console messages through `write_console_log()`, stripping Rich markup
+and writing line-buffered UTF-8 text to an append-mode file. Write failures
+disable the stream before reporting an error, avoiding recursive logging failures.
+Opening a replacement succeeds before the old file is closed. The app closes its
+stream on unmount; `ScriptRunner.close()` and its context manager close headless
+logs, and `replay()` uses that context manager. Script output suppressed by the
+app during replay is also absent from the tee. `tee` consumes literal path
+arguments, including `=`, instead of interpreting them as options.
 
 ## Scripts and synthesis
 

@@ -5,6 +5,7 @@ from ...constants import REF
 from ...model import NetError
 from .base import CommandHost
 
+PACKET_ACTIONS = {"cmd_ping", "cmd_mping", "cmd_multicast", "cmd_unicast", "cmd_broadcast", "cmd_dhcp"}
 
 class Interpreter(CommandHost):
     _commands: dict[str, str]
@@ -30,11 +31,19 @@ class Interpreter(CommandHost):
         a bare group name selects the group. ``key=value`` tokens become options."""
         if not toks:
             return
-        opts = {k.lower(): v.lower() for k, _, v in (t.partition("=") for t in toks if "=" in t)}
-        toks = [t for t in toks if "=" not in t]
+        original = list(toks)
+        # tee consumes the rest as a literal path, including '=' and case.
+        if toks[0].lower() == "tee":
+            opts = {}
+        else:
+            opts = {k.lower(): v.lower() for k, _, v in (t.partition("=") for t in toks if "=" in t)}
+            toks = [t for t in toks if "=" not in t]
         if not toks:
             raise NetError("missing command")
         word, args = toks[0].lower(), toks[1:]
+        for setting in ("trace", "detail"):
+            if setting in opts:
+                raise NetError(f"{setting} is a global setting; use `{setting} on` or `{setting} off` separately")
 
         if REF.match(toks[0]):
             if len(toks) == 1:
@@ -52,6 +61,9 @@ class Interpreter(CommandHost):
         handler = self._commands.get(word)
         if handler is None:
             raise NetError(f"unknown command {word!r} — type help")
+        if self.paused and handler in PACKET_ACTIONS:
+            self.queue_action(original)
+            return
         self._macro_word = word                  # which alias was typed (the macros share a handler)
         getattr(self, handler)(args, opts)
 

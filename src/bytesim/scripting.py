@@ -13,8 +13,11 @@ from __future__ import annotations
 from collections import Counter
 from types import SimpleNamespace
 
+from rich.markup import escape
+
 from .model import NetError, Network
 from .tui.commands.addressing import AddressCommands
+from .tui.commands.console import ConsoleCommands
 from .tui.commands.groups import GroupCommands
 from .tui.commands.interpreter import Interpreter
 from .tui.commands.naming import NamingCommands
@@ -56,14 +59,17 @@ class _Screen:
     def flash_device(self, *a, **k) -> None: ...
 
 
-class ScriptRunner(TopologyCommands, GroupCommands, AddressCommands, TrafficCommands, NamingCommands,
+class ScriptRunner(ConsoleCommands, TopologyCommands, GroupCommands, AddressCommands, TrafficCommands, NamingCommands,
                    SwitchingCommands, Interpreter):
     """A headless ByteSim: feed it commands, read back ``net``."""
 
-    def __init__(self, network: Network | None = None) -> None:
+    def __init__(self, network: Network | None = None, *, trace: bool = False,
+                 detail: bool | None = None) -> None:
         self.net = network or Network()
         self.auto = False
         self.graph = False
+        self.trace_enabled = trace
+        self.detail_enabled = detail
         self.replaying = 1            # always "in a script": no per-command side effects
         self.headless = True
         self.naming = None
@@ -78,6 +84,18 @@ class ScriptRunner(TopologyCommands, GroupCommands, AddressCommands, TrafficComm
 
     def log_msg(self, msg: str) -> None:
         self.log.append(msg)
+        error = self.write_console_log(msg)
+        if error:
+            self.log_msg(f"[red]✗ {escape(error)}[/]")
+
+    def close(self) -> None:
+        self.close_console_log()
+
+    def __enter__(self) -> "ScriptRunner":
+        return self
+
+    def __exit__(self, *exc) -> None:
+        self.close()
 
     def changed(self, skip=frozenset()) -> None:   # structure only: no layout, no re-addressing
         pass
@@ -87,12 +105,13 @@ class ScriptRunner(TopologyCommands, GroupCommands, AddressCommands, TrafficComm
 
     def replace_network(self, net: Network, auto: bool) -> None:
         self.net = net
+        self.pending_actions.clear()
 
     def arrange(self, announce: bool = False) -> None:
         pass
 
     def exit(self) -> None:
-        pass
+        self.close()
 
     def run(self, text: str, origin: str = "script") -> Network:
         """Run every command; raises NetError naming the line that failed."""
@@ -106,4 +125,5 @@ class ScriptRunner(TopologyCommands, GroupCommands, AddressCommands, TrafficComm
 
 def replay(text: str, network: Network | None = None) -> Network:
     """Build a network by running a script (into a fresh network unless one is given)."""
-    return ScriptRunner(network).run(text)
+    with ScriptRunner(network) as runner:
+        return runner.run(text)

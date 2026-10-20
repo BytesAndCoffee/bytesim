@@ -1,7 +1,9 @@
 """The network canvas: draws devices, cables, frames and packets; mouse and keys."""
 from __future__ import annotations
 
-from collections import Counter
+import time
+from collections import Counter, deque
+from collections.abc import Iterator
 from dataclasses import dataclass
 from typing import Callable
 
@@ -20,10 +22,15 @@ class Packet:
     cells: list[tuple[int, int]]
     color: str
     on_done: Callable[[], None] | None = None
-    pos: int = 0
+    pos: float = 0
 
 
 TRAIL = 4
+ANIMATION_FPS = 60
+PACKET_FRAMES = 90       # normal speed: longest active path takes about 1.5 seconds
+EFFECT_FPS = 45          # retain existing cell speed and blink/storm timing
+FLASH_FRAMES = 40        # two-thirds of a second
+WORK_SECONDS = 0.006     # yield routing/callback bursts back to Textual after each slice
 
 
 class NetCanvas(Widget, can_focus=True):
@@ -58,6 +65,10 @@ class NetCanvas(Widget, can_focus=True):
         self.show_addr = True
         self.pan = (0, 0)
         self.packets: list[Packet] = []
+        self._preparing: deque[Iterator[None]] = deque()
+        self._callbacks: deque[Callable[[], None]] = deque()
+        self._work_scheduled = False
+        self._packet_state: tuple | None = None
         self._geom: tuple | None = None          # (layout key, cable geometry)
         self.hot_links: Counter[int] = Counter()
         self.flash: dict[str, list] = {}   # device -> [colour, ticks left]
@@ -68,15 +79,44 @@ class NetCanvas(Widget, can_focus=True):
     def reset(self) -> None:
         """Forget selection and anything in flight (the network was replaced)."""
         self.selected = self.selected_group = None
+        self.cancel_packets()
+        self.pan = (0, 0)
+
+    def cancel_packets(self) -> None:
+        """Discard work whose paths may no longer match the edited network."""
+        # Generators hold no contexts across yields. Dropping them also works
+        # when a currently executing query discovers a storm and calls changed().
+        self._preparing.clear()
+        self._callbacks.clear()
         self.packets.clear()
         self.flash.clear()
         self.hot_links.clear()
-        self.pan = (0, 0)
+        self._packet_state = None
+
+    def _state(self) -> tuple:
+        return self.net.to_json(), frozenset(self.net.storming), self.app.graph  # type: ignore[attr-defined]
+
+    def cancel_if_changed(self) -> bool:
+        if self.busy and self._packet_state != self._state():
+            self.cancel_packets()
+            return True
+        return False
+
+    @property
+    def preparing(self) -> bool:
+        return bool(self._preparing)
+
+    def prepare(self, steps: Iterator[None]) -> None:
+        if not self.busy:
+            self._packet_state = self._state()
+        self._preparing.append(steps)
+        self.animate()
+        self.app.refresh_sidebar()  # type: ignore[attr-defined]
 
     @property
     def busy(self) -> bool:
-        """True while packets are animating."""
-        return bool(self.packets)
+        """True until preparation, playback, and all completion callbacks finish."""
+        return bool(self.packets or self._preparing or self._callbacks)
 
     @property
     def net(self) -> Network:
@@ -246,9 +286,10 @@ class NetCanvas(Widget, can_focus=True):
     # ---- packets -------------------------------------------------------
     def send_packet(self, cells: list[tuple[int, int]], color: str,
                     on_done: Callable[[], None] | None = None) -> None:
+        if not self.busy:
+            self._packet_state = self._state()
         self.packets.append(Packet(cells, color, on_done))
-        if self._timer is None:
-            self._timer = self.set_interval(1 / 45, self._tick)
+        self.animate()
 
     def heat(self, links) -> None:
         self.hot_links.update(links)
@@ -258,28 +299,74 @@ class NetCanvas(Widget, can_focus=True):
         self.hot_links += Counter()   # drop zero counts
         self.refresh()
 
-    def flash_device(self, dev_id: str, color: str, ticks: int = 30) -> None:
+    def flash_device(self, dev_id: str, color: str, ticks: int = FLASH_FRAMES) -> None:
         self.flash[dev_id] = [color, ticks]
         self.animate()
 
     def animate(self) -> None:
         """Make sure the animation clock is running (it stops itself when idle)."""
+        self._schedule_work()
         if self._timer is None:
-            self._timer = self.set_interval(1 / 45, self._tick)
+            self._timer = self.set_interval(1 / ANIMATION_FPS, self._tick)
+
+    def _schedule_work(self) -> None:
+        if (self._preparing or self._callbacks) and not self._work_scheduled and not self.app.paused:  # type: ignore[attr-defined]
+            self._work_scheduled = True
+            # A positive timer delay yields the event loop even when Textual's
+            # message queue is continually refilled by this batch.
+            self.set_timer(0.001, self._work)
+
+    def _work(self) -> None:
+        self._work_scheduled = False
+        if not self.app.paused:  # type: ignore[attr-defined]
+            self._drain_work()
+
+    def _drain_work(self) -> None:
+        """Run one bounded slice, then let input, drawing and timers run."""
+        deadline = time.perf_counter() + WORK_SECONDS
+        preparing = self.preparing
+        while (self._preparing or self._callbacks) and time.perf_counter() < deadline:
+            if self._preparing:
+                steps = self._preparing[0]
+                try:
+                    next(steps)
+                except StopIteration:
+                    if self._preparing and self._preparing[0] is steps:
+                        self._preparing.popleft()
+            else:
+                self._callbacks.popleft()()
+        if preparing and not self.preparing:
+            self.app.refresh_sidebar()  # type: ignore[attr-defined]
+        self._schedule_work()
 
     def _tick(self) -> None:
-        for pk in list(self.packets):
-            pk.pos += 1
+        if self.app.paused:  # type: ignore[attr-defined]
+            return
+        if self._preparing:
+            # Hold playback while building the batch: every initial request
+            # still starts at pos=0 together, even across several commands.
+            self._drain_work()
+            return
+        packets = list(self.packets)
+        longest = max((len(pk.cells) + TRAIL for pk in packets), default=0)
+        step = max(EFFECT_FPS / ANIMATION_FPS, (longest + 1) / PACKET_FRAMES) * self.app.animation_speed  # type: ignore[attr-defined]
+        # A common pace keeps multicast copies on the same cells until they
+        # branch. Scale by path length so a large layout doesn't mean a long wait.
+        self.packets = []
+        for pk in packets:
+            pk.pos += step
             if pk.pos - TRAIL >= len(pk.cells):
-                self.packets.remove(pk)
                 if pk.on_done:
-                    pk.on_done()
+                    self._callbacks.append(pk.on_done)
+            else:
+                self.packets.append(pk)
+        self._drain_work()
         for dev_id in list(self.flash):
             self.flash[dev_id][1] -= 1
             if self.flash[dev_id][1] <= 0:
                 del self.flash[dev_id]
         self.frame += 1
-        if not self.packets and not self.flash and not self.net.storming and self._timer is not None:
+        if not self.busy and not self.flash and not self.net.storming and self._timer is not None:
             self._timer.stop()
             self._timer = None
         self.refresh()
@@ -325,6 +412,10 @@ class NetCanvas(Widget, can_focus=True):
         geom = (paths, masks, kinds, sides, broken)
         self._geom = (key, geom)
         return geom
+
+    def cable_paths(self) -> list[list[tuple[int, int]]]:
+        """Reuse rendered cable routes when constructing packet paths."""
+        return self._geometry()[0]
 
     def _draw(self) -> Text:
         w, h = self.size.width, self.size.height
@@ -403,7 +494,7 @@ class NetCanvas(Widget, can_focus=True):
             put(x, y, "✕", "bold red")
         for pts in crawl:
             for k, (x, y) in enumerate(pts):
-                if (k - self.frame // 2) % 4 == 0:
+                if (k - (self.frame * EFFECT_FPS / ANIMATION_FPS) // 2) % 4 == 0:
                     put(x, y, "•", "bold bright_red")
 
         # Group labels sit on the top edge, in the first gap no cable passes through.
@@ -441,7 +532,7 @@ class NetCanvas(Widget, can_focus=True):
 
         for pk in self.packets:
             for k in range(TRAIL):
-                idx = pk.pos - k
+                idx = int(pk.pos) - k
                 if 0 <= idx < len(pk.cells):
                     x, y = pk.cells[idx]
                     put(x, y, "●" if k == 0 else "•", f"bold {pk.color}" if k == 0 else pk.color)
@@ -487,8 +578,8 @@ class NetCanvas(Widget, can_focus=True):
         if not d.up:
             bst = "red"
         elif d.id in self.net.storming:        # pulse while drowning in a storm
-            bst = "bold bright_red" if (self.frame // 12) % 2 else "red"
-        if flash and flash[1] % 10 >= 3:      # blink on arrival
+            bst = "bold bright_red" if ((self.frame * EFFECT_FPS / ANIMATION_FPS) // 12) % 2 else "red"
+        if flash and (flash[1] * EFFECT_FPS / ANIMATION_FPS) % 10 >= 3:      # blink on arrival
             tl, tr, bl, br, hz, vt, dn, up = "┏┓┗┛━┃┳┻"
             bst = f"bold {flash[0]}"
         x, y, w = d.x, d.y, d.width

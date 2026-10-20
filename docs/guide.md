@@ -1,6 +1,7 @@
 # ByteSim user guide
 
 - [The screen](#the-screen)
+- [Console logging](#console-logging)
 - [Devices and ports](#devices-and-ports)
 - [Cabling](#cabling)
 - [Layout and moving things](#layout-and-moving-things)
@@ -37,6 +38,38 @@
 
 The command line has focus when ByteSim starts. `Esc` moves focus to the
 canvas, and `Enter` or `:` on the canvas moves it back.
+
+## Console logging
+
+Use `tee` to copy new console output to a file while keeping it visible:
+
+```text
+tee traffic.log              start appending to a file
+detail on                   enable detailed output for the session
+mping all all               capture every reply and ARP line
+tee                         show the active file (or off)
+tee off                     stop file logging
+```
+
+Files contain plain UTF-8 text without Rich colours or console wrapping. Each
+message is flushed so another terminal can follow it with `tail -f traffic.log`.
+Existing content is retained. Capture includes later packet replies and errors;
+it starts when enabled and does not copy earlier console history. `detail on`
+still controls multicast verbosity in both the console and the file.
+
+Relative paths use ByteSim's working directory, `~` expands to your home
+directory, and paths with spaces may be quoted. `tee <another-file>` switches
+files. A failed open leaves the previous log active; a failed write disables
+the tee and reports an error in the console.
+
+To capture from startup, including the welcome message:
+
+```sh
+bytesim mynet.json --log-file traffic.log
+```
+
+The tee stays active across network loads, clears and undo/redo. It closes on
+exit and is session state, independent of saved networks.
 
 ## Devices and ports
 
@@ -376,16 +409,167 @@ tables.
 ping c1 c8                 echo request (red) and reply (green)
 ping c4 (1,1)              destinations can be addresses
 ping c1 internet           via the nearest gateway
+mping c1 c4 c6 c8          multicast request (magenta), individual replies (green)
+mping all c1               every other computer pings c1
+mping all all              every computer pings every other computer
+mping all all *            every ping-capable device pings every other one
+mping all c1 *             routers, gateways and computers each ping c1
+mping c1 r1:p2             probe a specific router interface
+detail on                  include every reply and ARP in subsequent commands
+ping c1 all                multicast ping to every other computer
+ping c1 office             multicast ping to members of a group
 unicast c2 c7              one-way packet (orange)
 mcast c1 c4 c6 c8          one packet, copied where the paths split (magenta)
 mcast c1 pcs all           receivers can be group names or `all` (every computer)
 ```
 
-Each send logs the address path, an ARP line for every hop (`ARP (3,1) is-at
+Detailed sends log the address path, an ARP line for every hop (`ARP (3,1) is-at
 R1C`) and the TTL. Multicast also reports where copies were made and how many
 cable crossings it took, compared with sending a separate unicast to each
 receiver. A device blinks when a packet arrives, and the cables in use stay
 highlighted until the packet is delivered.
+
+Packet animation scales with path length so large layouts stay responsive.
+The animation targets 60 fps. At normal speed, the longest active one-way path
+takes about 1.5 seconds. Multicast requests move together until their paths split.
+
+```text
+speed slow        half speed, for following packets closely
+speed normal      default playback speed (1x)
+speed fast        three times normal speed
+speed 0.75        choose your own multiplier (0.1–10; `speed 2x` also works)
+speed             show the current speed
+```
+
+Changes apply to packets already in flight. Speed is a session preference,
+retained when loading or clearing a network. It controls animation timing;
+`traffic rate` still controls how many background packets are generated.
+
+### Pause and simultaneous actions
+
+Use `pause` to freeze packets already in flight and stop background traffic.
+Packet commands entered while paused wait in a queue:
+
+```text
+pause
+ping c1 c6
+mping c2 c3 c4
+unicast c5 c6
+queue                 inspect the pending commands
+resume                launch all queued requests on the next animation tick
+```
+
+`play` and `unpause` are aliases for `resume`. `queue clear` discards queued
+commands while leaving playback paused. The inspector shows whether playback
+is paused and how many actions are queued.
+
+Ping, multicast ping, unicast, multicast, broadcast and explicit DHCP requests
+are queued, including their aliases. Editing, inspection and `speed` still work
+while paused. Routes are calculated when the batch starts, using the current
+topology. If a queued action fails, its error is reported and the remaining
+actions still start. Existing packets resume from their frozen positions;
+background traffic resumes without a catch-up burst.
+
+Replacing the network (`clear`, `load`, `demo`, or undo/redo) discards queued
+actions so they cannot target a different network. Pause remains a session
+setting. Queues and playback state are not saved in network snapshots.
+
+`mping <src> <receivers…>` sends one multicast echo request and collects a
+separate reply from each receiver. `ping` chooses this behavior when given
+multiple destinations, a group, `all`, or `*`. You can also write
+`mcast ping c1 c4 c6` (`multicast-ping` and `mcastping` are aliases for `mping`).
+Nested groups expand to their members, duplicate targets are removed, and the
+sender is excluded. `all` as a target means every other computer. `all` as a
+source starts one multicast ping from each computer that has another receiver;
+`mping all all` checks every ordered pair of distinct computers. Replies and
+summaries identify their sender so concurrent results can be distinguished.
+
+Append `*` after the destinations to expand `all` on both sides to every
+ping-capable device: `mping all all *`. In address mode, eligible devices are
+computers, routers and gateways with at least one assigned address. ByteSim's
+switches have no management address and remain excluded. Unaddressed devices
+are ineligible; configured devices that are down or unreachable still participate
+and produce failures. Each device excludes itself, including its other interfaces.
+Wildcards select each device once, so 60 eligible devices produce 3,540 ordered
+pairs. In graph mode, every device is eligible, including switches and unaddressed
+nodes, and pings test physical paths rather than IP reachability. The existing
+two-argument forms `mping c1 *` and `mping * *` retain their computer-only selection.
+
+A bare device target probes one of its addressed interfaces using the route with
+the fewest cable hops; equal-length routes choose the lowest numbered destination
+port. Use an interface such as `r1:p2` or an address such as `(3,1)` to select the
+target explicitly. Multicast preserves that selection and deduplicates equivalent
+address/port targets. With detailed output, each request shows its originating
+interface/address and selected destination interface/address. A router's selected
+address can be reached through another interface on that router; the destination
+address and physical ingress port need not be the same.
+
+Trace and detail are global session settings. For full request and return paths:
+
+```text
+trace on
+detail off
+mping c1 c6
+mping all all *
+```
+
+Each receiver gets a `TRACE REQUEST` and a `TRACE REPLY`, identifying the sender
+and target, addressed endpoints, and every physical cable hop, including switches.
+For example, `r1:p2 -fabric#3-> r2:p1` means the selected cable is link 3 (its
+one-based position in the network's cable list), carrying fabric traffic from
+router 1 port 2 to router 2 port 1. Successive hops show each transit device's
+ingress and egress ports, including the chosen LAG member. Endpoint addresses
+are omitted in graph mode.
+
+Request traces describe routes selected during preparation; reply traces appear
+when requests arrive and their return routes are calculated. Failed route queries
+produce `TRACE REQUEST FAILED` or `TRACE REPLY FAILED` with the reason. Traces
+describe forwarding decisions; the reply summaries count completed deliveries.
+
+`trace off` is the default. `trace` and `detail` are independent: use
+`trace on` with `detail off` for full paths and per-sender summaries, or use
+`detail on` for the existing ARP and reply diagnostics too. `detail auto` is the
+default: small actions show details, while large multicast batches summarize.
+`trace` and `detail` without arguments show their current values. Changes affect
+subsequent output immediately, including preparation and replies already in flight;
+queued actions use the settings active when resumed. The inspector displays both
+settings. They persist across network loads, clears and undo/redo, independently
+of saved networks. Tracing also applies to ordinary ping, unicast and one-way
+multicast. `traceroute` and `tracert` remain ping aliases; `trace` controls output.
+
+Startup flags set the same preferences:
+
+```sh
+bytesim mynet.json --trace --no-detail --log-file paths.log
+```
+
+Use `--detail` for full diagnostics, `--no-detail` for concise output, and
+`--no-trace` to disable paths. Per-command `trace=` and `detail=` options are
+rejected with guidance to use the global settings. Tracing works with groups, all
+senders, the whole-network `*` modifier, aliases and paused queues. Use
+`tee paths.log` to save the same traces as plain text.
+
+Batches of 128 or more source/receiver pairs prepare routes in short slices
+while the UI remains responsive. Requests wait at position zero until the whole
+batch is ready, then leave together. Return-route calculations also yield between
+small batches of arrivals. `pause` freezes preparation as well as playback;
+`resume` continues it. Editing the network, layout or simulation mode cancels prepared and
+in-flight packets so their paths cannot reference an older topology.
+
+Large batches default to one reply/failure summary per sender instead of logging
+every packet and ARP. All pairs still run, with real return routes and MAC
+learning. Use `detail on` to show every reply, or `detail off` to summarize a
+smaller batch. Summaries count every failure; summary mode shows at most five
+individual request errors and five return-route errors per sender.
+
+The request shares cables until its paths split, just like ordinary multicast.
+Each receiver routes its own reply back to the sender's originating interface
+when the request arrives, so a request can arrive even if the reply has no
+return route. Detailed output reports each reply's hops, TTL and simulated time,
+plus a summary such as `multicast ping: 2/3 replies, 1 failed`. Unreachable
+receivers and failed return routes are reported individually in detailed mode; other receivers
+still reply. This also works in graph mode, using physical paths. A single
+device or internet destination with ordinary `ping` keeps its existing behavior.
 
 ## Random traffic
 
@@ -749,11 +933,18 @@ them, and a group name on its own selects the group.
 | `ip [id[:port]] [addr [gw] \| dhcp \| adhoc \| none]` | | show or set addresses |
 | `dhcp`, `release`, `adhoc <id[:nic]\|all>` | | client address control |
 | `dhcpd <router> [on\|off]` | | router DHCP server |
-| `ping <src> <dst>` | `trace`, `traceroute` | echo and reply |
+| `ping <src> <dst…>` | `tracert`, `traceroute` | echo and reply; groups, `all` or several destinations use multicast |
+| `mping <src\|all> <id\|addr\|group\|all> … [*]` | `mcastping`, `multicast-ping` | shared echo requests and replies; trailing `*` expands eligibility |
+| `trace [on\|off]` | | global full-path output; no argument shows status |
+| `detail [on\|off\|auto]` | | global diagnostic verbosity; auto adapts to batch size; no argument shows status |
 | `unicast <src> <dst>` | `ucast`, `send` | one-way packet |
 | `multicast <src> <dst…>` | `mcast` | one-to-many packet |
 | `mode graph\|addr` | | graph or address mode |
 | `traffic on [rate] [seed=] [hosts=] [mix=]`, `traffic [off\|rate n\|reset]` | | random background traffic and statistics |
+| `speed [slow\|normal\|fast\|0.1..10]` | | set or show packet animation speed; normal is 1x |
+| `pause`, `resume` | `play`, `unpause` (resume) | freeze playback and queue packet commands, then start them together |
+| `queue [clear]` | | inspect queued actions or discard them |
+| `tee [file\|off]` | | append console output to a text file, show status, or stop capture |
 | `broadcast <id[:port]>` | `bcast`, `flood` | flood one frame (storms in a live loop) |
 | `lag`, `lag auto`, `lag <switch\|domain> <switch\|router\|gateway\|domain>`, `unlag …`, `lags` | | find and bundle aggregatable spans |
 | `mlag <group…>`, `unmlag <group>`, `mlags` | | make a group of switches act as one (needs peer links) |

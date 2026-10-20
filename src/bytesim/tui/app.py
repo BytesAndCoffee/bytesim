@@ -1,6 +1,8 @@
 """The ByteSim Textual app: layout, the command line, and keeping everything in sync."""
 from __future__ import annotations
 
+from pathlib import Path
+
 from rich.markup import escape
 from textual import events
 from textual.app import App, ComposeResult
@@ -13,6 +15,7 @@ from ..model import NetError, Network
 from .canvas import NetCanvas
 from .command_input import CommandInput
 from .commands.addressing import AddressCommands
+from .commands.console import ConsoleCommands
 from .commands.groups import GroupCommands
 from .commands.history import HistoryCommands
 from .commands.interpreter import Interpreter
@@ -25,7 +28,7 @@ from .commands.traffic import TrafficCommands
 from .inspector import render_inspector
 
 
-class ByteSimApp(TopologyCommands, GroupCommands, AddressCommands, TrafficCommands, NamingCommands,
+class ByteSimApp(ConsoleCommands, TopologyCommands, GroupCommands, AddressCommands, TrafficCommands, NamingCommands,
                  SwitchingCommands, ScriptCommands, HistoryCommands, Interpreter, App):
     """Canvas on the left, inspector on the right, console and command line below."""
 
@@ -43,15 +46,20 @@ class ByteSimApp(TopologyCommands, GroupCommands, AddressCommands, TrafficComman
     AUTO_FOCUS = "#cmd"
 
     def __init__(self, network: Network | None = None, startup: list[str] | None = None,
-                 auto: bool | None = None) -> None:
+                 auto: bool | None = None, log_file: str | Path | None = None,
+                 trace: bool = False, detail: bool | None = None) -> None:
         """``network`` starts the app on an existing model; ``startup`` commands run once mounted.
         ``auto`` turns auto-arrange on or off (default: on, unless a network with its own
-        positions is given)."""
+        positions is given). ``log_file`` appends console output from startup;
+        ``trace`` and ``detail`` initialize session output settings."""
         super().__init__()
         self.net = network or Network()
         self.auto = (network is None) if auto is None else auto
         self.graph = False              # graph-only mode: connectivity without addressing
+        self.trace_enabled = trace
+        self.detail_enabled = detail
         self._startup = startup or []
+        self._log_file = log_file
         self._ha_seen: dict = {}
         self._commands = collect(type(self))
 
@@ -72,6 +80,11 @@ class ByteSimApp(TopologyCommands, GroupCommands, AddressCommands, TrafficComman
         self.query_one("#canvas").border_title = "network"
         self.query_one("#side").border_title = "inspector"
         self.query_one("#log").border_title = "console"
+        if self._log_file is not None:
+            try:
+                self.cmd_tee([str(self._log_file)], {})
+            except NetError as e:
+                self.log_msg(f"[red]✗ {escape(str(e))}[/]")
         self.log_msg(f"[b]ByteSim {__version__}[/] — type [cyan]help[/] for commands, "
                      "or [cyan]demo[/] / [cyan]demo ha[/] for a sample network.")
         if self.net.devices:
@@ -81,10 +94,16 @@ class ByteSimApp(TopologyCommands, GroupCommands, AddressCommands, TrafficComman
         self.refresh_sidebar()
 
     # ---- shared helpers (used by the canvas and the command mixins) ----
+    def on_unmount(self) -> None:
+        self.close_console_log()
+
     def log_msg(self, msg: str) -> None:
         if self.replaying:                   # a script is running: keep the console quiet
             return
         self.query_one(RichLog).write(msg)
+        error = self.write_console_log(msg)
+        if error:
+            self.log_msg(f"[red]✗ {escape(error)}[/]")
 
     def action_focus_cmd(self) -> None:
         self.query_one(CommandInput).focus()
@@ -101,6 +120,7 @@ class ByteSimApp(TopologyCommands, GroupCommands, AddressCommands, TrafficComman
         self.changed()
 
     def manual_moved(self) -> None:
+        self.canvas.cancel_packets()
         if self.auto:
             self.auto = False
             self.log_msg("[dim]auto-arrange paused — press [b]a[/b] or type [b]auto[/b] to re-arrange[/]")
@@ -108,6 +128,7 @@ class ByteSimApp(TopologyCommands, GroupCommands, AddressCommands, TrafficComman
     def replace_network(self, net: Network, auto: bool) -> None:
         """Swap in a whole new network (clear, demo, load)."""
         self.net = net
+        self.pending_actions.clear()
         self.auto = auto
         self._ha_seen = {}
         self.canvas.reset()
@@ -124,11 +145,14 @@ class ByteSimApp(TopologyCommands, GroupCommands, AddressCommands, TrafficComman
         if self.auto:
             self.net.auto_layout(self.canvas.size.width or 120, height=self.canvas.size.height or 40)
         c = self.canvas
+        if c.cancel_if_changed():
+            self.log_msg("[dim]in-flight packet work cancelled after network/layout change[/]")
         if c.selected not in self.net.devices:
             c.selected = None
         if c.selected_group not in self.net.groups:
             c.selected_group = None
-        c.hot_links.clear()
+        if not c.busy:
+            c.hot_links.clear()
         c.refresh()
         self.refresh_sidebar()
 
@@ -140,7 +164,9 @@ class ByteSimApp(TopologyCommands, GroupCommands, AddressCommands, TrafficComman
         c = self.canvas
         self.query_one("#info", Static).update(
             render_inspector(self.net, c.selected, c.selected_group, self.graph, self.auto,
-                             self.naming_text(), self.traffic))
+                             self.naming_text(), self.traffic, paused=self.paused,
+                             queued=len(self.pending_actions), preparing=c.preparing,
+                             trace=self.trace_enabled, detail=self.detail_enabled))
 
     # ---- the command line ----------------------------------------------
     def on_input_submitted(self, event: Input.Submitted) -> None:

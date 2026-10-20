@@ -19,7 +19,7 @@ from .registry import command
 
 UNDO_LIMIT = 100
 MOVE_BURST = 2.0          # seconds: moves closer together than this are one step
-NOT_RECORDED = {"undo", "redo", "history"}
+NOT_RECORDED = {"undo", "redo", "history", "tee", "trace", "detail"}
 
 
 @dataclass
@@ -80,6 +80,7 @@ class HistoryCommands(CommandHost):
 
     def _restore(self, step: Step) -> None:
         self.net = step.net
+        self.pending_actions.clear()
         self.auto = step.auto
         c = self.canvas
         c.reset()

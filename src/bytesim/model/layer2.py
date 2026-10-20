@@ -27,9 +27,34 @@ def structure_memo(fn):
     return wrapper
 
 
-class Layer2Mixin(NetworkBase):
-    _memo: dict | None = None
+def route_query(fn):
+    """A route is one synchronous, read-only query. Never keep results across routes."""
+    @functools.wraps(fn)
+    def wrapper(self, *args, **kwargs):
+        previous, self._route_memo = self._route_memo, {}
+        try:
+            with self.remembering():
+                return fn(self, *args, **kwargs)
+        finally:
+            self._route_memo = previous
+    return wrapper
 
+
+def route_memo(fn):
+    """Reuse query results only inside route_query; remembering() alone stays live."""
+    @functools.wraps(fn)
+    def wrapper(self, *args, **kwargs):
+        memo = self._route_memo
+        if memo is None:
+            return fn(self, *args, **kwargs)
+        key = (fn.__name__, args, tuple(sorted(kwargs.items())))
+        if key not in memo:
+            memo[key] = fn(self, *args, **kwargs)
+        return memo[key]
+    return wrapper
+
+
+class Layer2Mixin(NetworkBase):
     @contextmanager
     def remembering(self):
         """A scope in which the structure is remembered (nothing may change it meanwhile)."""
@@ -188,12 +213,19 @@ class Layer2Mixin(NetworkBase):
 
     def lag_ports(self, dev_id: str, port: int) -> list[int]:
         """All of a device's ports in the same bundle as this one (just [port] if unbundled)."""
+        if self._memo is not None:
+            ports = self._memo.setdefault("lag_ports", {})
+            if (dev_id, port) in ports:
+                return ports[dev_id, port]
         li = self.link_index(dev_id, port)
         pair = self.bundle(self.links[li]) if li is not None else None
-        if pair is None:
-            return [port]
-        return sorted(self.links[i].port_of(dev_id) for i in self._bundle_cables(pair)
-                      if self.links[i].touches(dev_id))
+        result = ([port] if pair is None else
+                  sorted(self.links[i].port_of(dev_id) for i in self._bundle_cables(pair)
+                         if self.links[i].touches(dev_id)))
+        if self._memo is not None:
+            for p in result:
+                ports[dev_id, p] = result
+        return result
 
     def lag_primary(self, dev_id: str, port: int) -> int:
         """The port that speaks for a bundle on this device (its lowest member port)."""
@@ -222,6 +254,7 @@ class Layer2Mixin(NetworkBase):
                 and (l.a, l.pa) not in self.stp_blocked and (l.b, l.pb) not in self.stp_blocked
                 and l.a not in self.storming and l.b not in self.storming)
 
+    @route_memo
     @structure_memo
     def segment(self, dev_id: str, port: int) -> list[tuple[str, int]]:
         """Other interfaces in the same broadcast domain (reached through switches only)."""
@@ -235,8 +268,8 @@ class Layer2Mixin(NetworkBase):
         seen, q, out = {v}, deque([v]), []
         while q:
             u = q.popleft()
-            for l in self.links:
-                if l.touches(u) and self.usable(l):
+            for _, l in self.adjacent_links(u):
+                if self.usable(l):
                     w, wp = l.other(u)
                     if w == dev_id and wp in mine:
                         continue
@@ -284,8 +317,8 @@ class Layer2Mixin(NetworkBase):
         q = deque([v])
         while q:
             u = q.popleft()
-            for i, l in enumerate(self.links):
-                if not l.touches(u) or not self.usable(l):
+            for i, l in self.adjacent_links(u):
+                if not self.usable(l):
                     continue
                 w, wp = l.other(u)
                 if (w, wp) in arrive:
@@ -308,6 +341,7 @@ class Layer2Mixin(NetworkBase):
 
 
     # ---- graph-only mode -----------------------------------------------
+    @structure_memo
     def tree(self, src: str) -> dict[str, tuple[str, int] | None]:
         """Shortest-path tree ignoring addresses. Computers never forward."""
         prev: dict[str, tuple[str, int] | None] = {src: None}
@@ -316,8 +350,8 @@ class Layer2Mixin(NetworkBase):
             u = q.popleft()
             if u != src and self.devices[u].kind == "c":
                 continue
-            for i, l in enumerate(self.links):
-                if l.touches(u) and self.usable(l):
+            for i, l in self.adjacent_links(u):
+                if self.usable(l):
                     v = l.other(u)[0]
                     if v not in prev:
                         prev[v] = (u, i)
