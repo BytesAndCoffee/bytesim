@@ -42,3 +42,6 @@ Thumbs.db
 
 # ByteSim's default save file
 bytesim.json
+
+# Local agent handoff notes
+handoff.md
