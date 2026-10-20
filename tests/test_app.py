@@ -1,5 +1,6 @@
 """End-to-end: drive the real Textual app headlessly."""
 import asyncio
+import gc
 
 from bytesim.tui import ByteSimApp
 
@@ -394,3 +395,17 @@ def test_mlag_commands():
     assert "must be joined by peer links" in text and "act as one switch, 1 peer link" in text
     assert "g1–fab: 2 cables can now be one link" in text and "fab–g1: 2 parallel cables" in text
     assert "bundles to g1" in text and app.net.lags == {frozenset({"fab", "g1"})}
+
+
+def test_heap_freeze_is_lifted_when_the_app_closes():
+    async def go():
+        app = ByteSimApp()
+        async with app.run_test(size=(100, 40)) as pilot:
+            await pilot.pause()
+            app.settle_heap()
+            assert gc.get_freeze_count() > 0
+        assert gc.get_freeze_count() == 0
+        app.settle_heap()                    # a callback that lands after unmount stays inert
+        assert gc.get_freeze_count() == 0
+
+    asyncio.run(go())

@@ -54,7 +54,8 @@ def test_speed_controls_playback_in_flight_and_preserves_rendering():
                 ticks = 0
                 while canvas.busy and ticks < 3 * PACKET_FRAMES:
                     canvas._tick()
-                    canvas.render()  # fractional progress still indexes integer screen cells
+                    canvas.refresh()
+                    canvas.render_line(0)  # fractional progress still indexes integer screen cells
                     ticks += 1
                 assert not canvas.busy
                 durations[setting] = ticks

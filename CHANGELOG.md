@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.3.1 (2026-10-20)
+
+- Smoother animation on large topologies: the canvas renders line by line from a
+  cached frame grid, caches group frames and address chains with the cable
+  geometry, and settles the garbage collector after each network load. On a
+  88-device fabric, frame draws dropped from about 12 ms to 4 ms and traffic
+  playback went from 27 to 60 ticks per second.
+
 ## 0.3.0 (2026-10-20)
 
 ### Layout
