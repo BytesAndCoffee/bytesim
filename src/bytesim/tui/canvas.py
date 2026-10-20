@@ -326,6 +326,10 @@ class NetCanvas(Widget, can_focus=True):
         self._geom = (key, geom)
         return geom
 
+    def cable_paths(self) -> list[list[tuple[int, int]]]:
+        """Reuse rendered cable routes when constructing packet paths."""
+        return self._geometry()[0]
+
     def _draw(self) -> Text:
         w, h = self.size.width, self.size.height
         ox, oy = self.pan

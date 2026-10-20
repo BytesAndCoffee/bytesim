@@ -4,6 +4,7 @@ from __future__ import annotations
 from collections import deque
 
 from .base import NetworkBase
+from .layer2 import route_memo
 from .types import Link
 
 
@@ -13,6 +14,7 @@ class HAMixin(NetworkBase):
             return None
         return next((g for g in reversed(self.chain(dev_id)) if g in self.clusters), None)
 
+    @route_memo
     def ha_state(self, name: str) -> dict:
         """Who is alive, who can coordinate, who is active, and who owns each virtual gateway.
 

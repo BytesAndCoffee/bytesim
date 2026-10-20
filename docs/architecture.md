@@ -130,10 +130,18 @@ connects in (N/E/S/W), so crossings and junctions get the right box-drawing
 character. A cell used only by control cables uses the double-line set; one
 used only by fabric cables uses the heavy set.
 
-Packets are lists of screen cells. A timer moves every packet forward one
-cell per tick and runs a callback when it arrives, which is how ping chains
-its reply. Multicast copies share cells until their paths split, so a single
-packet appears to fork.
+Structural `remembering()` scopes cache port indexes, adjacency, bundle
+membership and LAG ports, preserving cable order. They never cache liveness.
+`route_query` adds a separate result cache for segments, addressed interfaces
+and HA state during one synchronous `route()` call; it is discarded on success
+or error before any model mutation or event-loop yield. `_plan` shares structural
+indexes between routing and ARP flooding, leaving the scope before a storm
+changes the model.
+
+Packets are lists of screen cells, built from the canvas's cached cable geometry.
+A timer moves every packet forward one cell per tick and runs a callback when
+it arrives, which is how ping chains its reply. Multicast copies share cells
+until their paths split, so a single packet appears to fork.
 
 ## Scripts and synthesis
 

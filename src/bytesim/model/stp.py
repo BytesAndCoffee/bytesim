@@ -298,8 +298,8 @@ class SpanningTreeMixin(NetworkBase):
                 # vPC loop avoidance: what crossed a peer link never leaves on a bundle of that domain
                 over_peer = self.end(dev) if self.is_peer_link(self.links[li]) else None  # type: ignore[attr-defined]
                 bundles_used: set[frozenset] = set()
-                for lj, l in enumerate(self.links):
-                    if lj != li and l.touches(dev) and ok(l):
+                for lj, l in self.adjacent_links(dev):
+                    if lj != li and ok(l):
                         pair = self.bundle(l)  # type: ignore[attr-defined]
                         if pair is not None:       # one member per bundle, never back the way it came
                             if pair == came_by or pair in bundles_used or over_peer in pair:

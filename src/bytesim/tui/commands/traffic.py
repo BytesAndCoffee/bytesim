@@ -16,7 +16,6 @@ from .registry import command
 
 class TrafficCommands(CommandHost):
     INTERNET = ("internet", "inet", "wan")
-
     @staticmethod
     def _flatten(legs: list[Leg]) -> list[tuple[str, int]]:
         path: list[tuple[str, int]] = []
@@ -110,18 +109,25 @@ class TrafficCommands(CommandHost):
                                + self.storm_hint(src, dst))  # type: ignore[attr-defined]
             return label, path, None, internet
         net.notes.clear()
-        label, cands = self._resolve_dst(tok)
-        try:
-            legs = self._best_route(src, cands)
-        except NetError as e:
-            hint = self.storm_hint(src, *(c[0] for c in cands or []))  # type: ignore[attr-defined]
-            raise NetError(f"{e}{hint}") from None
-        # Each hop starts with an ARP request: a broadcast. Into a live loop, that's a storm.
-        for a, b, _ in legs:
-            fl = net.flood(a)
-            if fl.storm:
-                self.set_off_storm(fl, f"the ARP for {fmt(net.addr_of(b))} from {self._ifname(a)}")  # type: ignore[attr-defined]
-                raise NetError(f"{self._ifname(a)} never got an ARP reply: its broadcast set off a storm")
+        storm = None
+        with net.remembering():
+            label, cands = self._resolve_dst(tok)
+            try:
+                legs = self._best_route(src, cands)
+            except NetError as e:
+                hint = self.storm_hint(src, *(c[0] for c in cands or []))  # type: ignore[attr-defined]
+                raise NetError(f"{e}{hint}") from None
+            # Every hop starts with ARP. Share structural indexes with routing,
+            # but leave the scope before setting off a storm (a model mutation).
+            for a, b, _ in legs:
+                fl = net.flood(a)
+                if fl.storm:
+                    storm = a, b, fl
+                    break
+        if storm is not None:
+            a, b, fl = storm
+            self.set_off_storm(fl, f"the ARP for {fmt(net.addr_of(b))} from {self._ifname(a)}")  # type: ignore[attr-defined]
+            raise NetError(f"{self._ifname(a)} never got an ARP reply: its broadcast set off a storm")
         return label, self._flatten(legs), legs, internet
 
     def _learn(self, legs: list[Leg] | None, both_ways: bool = False) -> None:
@@ -198,9 +204,10 @@ class TrafficCommands(CommandHost):
         """Screen cells a packet crosses along a path, port to port."""
         net = self.net
         cells: list[tuple[int, int]] = []
+        cable_paths = self.canvas.cable_paths() if not self.headless else None
         for (u, _), (v, li) in zip(path, path[1:]):
             l = net.links[li]
-            pts = route(net, l, li)
+            pts = cable_paths[li] if cable_paths is not None else route(net, l, li)
             if l.a != u:
                 pts = pts[::-1]
             du, dv = net.devices[u], net.devices[v]

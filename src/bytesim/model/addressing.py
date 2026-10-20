@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from ..constants import HOST_MAX, POOL, VIP_HOST
 from .base import NetworkBase
-from .layer2 import structure_memo
+from .layer2 import route_memo, structure_memo
 from .types import Iface, NetError, fmt
 
 class AddressingMixin(NetworkBase):
@@ -17,6 +17,7 @@ class AddressingMixin(NetworkBase):
         i = self.ifaces.get(f"{ifc[0]}:{ifc[1]}")
         return i.addr if i else None
 
+    @route_memo
     def addressed(self, dev_id: str) -> list[tuple[int, Iface]]:
         dev = self.devices[dev_id]
         if dev.kind == "s":

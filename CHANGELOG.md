@@ -68,3 +68,5 @@ First release.
   `lag auto`, and clones of groups that contain MLAG domains (a 48-device MLAG fabric went
   from 168 to 80 commands).
 - JSON save and load; a `bytesim` command with `--demo` and `--run`.
+- Scoped port/adjacency indexes, per-route query caches and reused cable
+  geometry reduce routing overhead on large fabrics.
