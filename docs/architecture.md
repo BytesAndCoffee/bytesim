@@ -139,9 +139,15 @@ indexes between routing and ARP flooding, leaving the scope before a storm
 changes the model.
 
 Packets are lists of screen cells, built from the canvas's cached cable geometry.
-A timer moves every packet forward one cell per tick and runs a callback when
-it arrives, which is how ping chains its reply. Multicast copies share cells
-until their paths split, so a single packet appears to fork.
+A 60 fps timer moves them at a common pace
+and runs a callback on arrival, which is how ping chains its reply. The pace
+is at least 45 cells per second at normal speed and scales with the longest
+active path to finish it within 90 ticks (about 1.5 seconds at the target frame
+rate). The session's `animation_speed` multiplier changes that shared pace;
+fractional positions make slower playback smooth. `speed` accepts slow (0.5x),
+normal (1x), fast (3x), or a numeric multiplier from 0.1 to 10.
+Multicast copies share cells until their paths split, so a single packet
+appears to fork.
 
 ## Scripts and synthesis
 

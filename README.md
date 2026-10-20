@@ -50,6 +50,7 @@ forwarding, failure) and leaves out the detail that gets in the way:
   cables, top talkers), reproducible with a seed.
 - **Unicast, ping and multicast.** With multicast you can see the packet copied
   wherever the paths split.
+- **Animation speed.** Slow packets down or speed them up with `speed`.
 - **Cable roles** (data, control, fabric) and failures you can trigger by hand.
 - **Multipath**: flow-hashed ECMP across equal-cost routes, link aggregation
   (`lag`) for parallel cables, and MLAG/vPC domains for cables to several switches.

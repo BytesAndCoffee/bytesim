@@ -16,6 +16,7 @@ class CommandHost:
     net: Network
     auto: bool
     graph: bool
+    animation_speed: float = 1.0  # session playback multiplier, independent of traffic rate
     replaying: int = 0          # > 0 while a script runs (hosts may batch their side effects)
     headless: bool = False      # True for the screenless ScriptRunner
 

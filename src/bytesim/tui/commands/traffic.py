@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import random
 import time
+from math import isfinite
 
 from rich.markup import escape
 
@@ -16,6 +17,26 @@ from .registry import command
 
 class TrafficCommands(CommandHost):
     INTERNET = ("internet", "inet", "wan")
+    SPEEDS = {"slow": 0.5, "normal": 1.0, "fast": 3.0}
+
+    @command("speed")
+    def cmd_speed(self, args: list[str], opts: dict[str, str]) -> None:
+        usage = "usage: speed [slow|normal|fast|0.1..10]"
+        if len(args) > 1:
+            raise NetError(usage)
+        if args:
+            token = args[0].lower()
+            try:
+                speed = self.SPEEDS[token] if token in self.SPEEDS else float(token.removesuffix("x"))
+            except ValueError:
+                raise NetError(usage) from None
+            if not isfinite(speed) or not 0.1 <= speed <= 10:
+                raise NetError(usage)
+            self.animation_speed = speed
+        self.log_msg(f"animation speed: [b]{self.animation_speed:g}x[/]"
+                     " · slow=0.5x · normal=1x · fast=3x")
+
+
     @staticmethod
     def _flatten(legs: list[Leg]) -> list[tuple[str, int]]:
         path: list[tuple[str, int]] = []

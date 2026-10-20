@@ -20,10 +20,14 @@ class Packet:
     cells: list[tuple[int, int]]
     color: str
     on_done: Callable[[], None] | None = None
-    pos: int = 0
+    pos: float = 0
 
 
 TRAIL = 4
+ANIMATION_FPS = 60
+PACKET_FRAMES = 90       # normal speed: longest active path takes about 1.5 seconds
+EFFECT_FPS = 45          # retain existing cell speed and blink/storm timing
+FLASH_FRAMES = 40        # two-thirds of a second
 
 
 class NetCanvas(Widget, can_focus=True):
@@ -247,8 +251,7 @@ class NetCanvas(Widget, can_focus=True):
     def send_packet(self, cells: list[tuple[int, int]], color: str,
                     on_done: Callable[[], None] | None = None) -> None:
         self.packets.append(Packet(cells, color, on_done))
-        if self._timer is None:
-            self._timer = self.set_interval(1 / 45, self._tick)
+        self.animate()
 
     def heat(self, links) -> None:
         self.hot_links.update(links)
@@ -258,28 +261,37 @@ class NetCanvas(Widget, can_focus=True):
         self.hot_links += Counter()   # drop zero counts
         self.refresh()
 
-    def flash_device(self, dev_id: str, color: str, ticks: int = 30) -> None:
+    def flash_device(self, dev_id: str, color: str, ticks: int = FLASH_FRAMES) -> None:
         self.flash[dev_id] = [color, ticks]
         self.animate()
 
     def animate(self) -> None:
         """Make sure the animation clock is running (it stops itself when idle)."""
         if self._timer is None:
-            self._timer = self.set_interval(1 / 45, self._tick)
+            self._timer = self.set_interval(1 / ANIMATION_FPS, self._tick)
 
     def _tick(self) -> None:
-        for pk in list(self.packets):
-            pk.pos += 1
+        packets = list(self.packets)
+        longest = max((len(pk.cells) + TRAIL for pk in packets), default=0)
+        step = max(EFFECT_FPS / ANIMATION_FPS, (longest + 1) / PACKET_FRAMES) * self.app.animation_speed  # type: ignore[attr-defined]
+        # A common pace keeps multicast copies on the same cells until they
+        # branch. Scale by path length so a large layout doesn't mean a long wait.
+        self.packets, done = [], []
+        for pk in packets:
+            pk.pos += step
             if pk.pos - TRAIL >= len(pk.cells):
-                self.packets.remove(pk)
                 if pk.on_done:
-                    pk.on_done()
+                    done.append(pk.on_done)
+            else:
+                self.packets.append(pk)
+        for on_done in done:       # after the sweep: a callback may send the next packet
+            on_done()
         for dev_id in list(self.flash):
             self.flash[dev_id][1] -= 1
             if self.flash[dev_id][1] <= 0:
                 del self.flash[dev_id]
         self.frame += 1
-        if not self.packets and not self.flash and not self.net.storming and self._timer is not None:
+        if not self.busy and not self.flash and not self.net.storming and self._timer is not None:
             self._timer.stop()
             self._timer = None
         self.refresh()
@@ -407,7 +419,7 @@ class NetCanvas(Widget, can_focus=True):
             put(x, y, "✕", "bold red")
         for pts in crawl:
             for k, (x, y) in enumerate(pts):
-                if (k - self.frame // 2) % 4 == 0:
+                if (k - (self.frame * EFFECT_FPS / ANIMATION_FPS) // 2) % 4 == 0:
                     put(x, y, "•", "bold bright_red")
 
         # Group labels sit on the top edge, in the first gap no cable passes through.
@@ -445,7 +457,7 @@ class NetCanvas(Widget, can_focus=True):
 
         for pk in self.packets:
             for k in range(TRAIL):
-                idx = pk.pos - k
+                idx = int(pk.pos) - k
                 if 0 <= idx < len(pk.cells):
                     x, y = pk.cells[idx]
                     put(x, y, "●" if k == 0 else "•", f"bold {pk.color}" if k == 0 else pk.color)
@@ -491,8 +503,8 @@ class NetCanvas(Widget, can_focus=True):
         if not d.up:
             bst = "red"
         elif d.id in self.net.storming:        # pulse while drowning in a storm
-            bst = "bold bright_red" if (self.frame // 12) % 2 else "red"
-        if flash and flash[1] % 10 >= 3:      # blink on arrival
+            bst = "bold bright_red" if ((self.frame * EFFECT_FPS / ANIMATION_FPS) // 12) % 2 else "red"
+        if flash and (flash[1] * EFFECT_FPS / ANIMATION_FPS) % 10 >= 3:      # blink on arrival
             tl, tr, bl, br, hz, vt, dn, up = "┏┓┗┛━┃┳┻"
             bst = f"bold {flash[0]}"
         x, y, w = d.x, d.y, d.width

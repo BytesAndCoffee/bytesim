@@ -4,6 +4,9 @@
 
 First release.
 
+- Packet animation targets 60 fps, preserving normal playback duration, arrival
+  flashes and storm effect timing.
+
 - Gateways, routers, switches and computers with any number of ports or NICs;
   cabling by typing device ids.
 - Automatic layered layout; moving devices with the keyboard or mouse; panning.
@@ -27,6 +30,9 @@ First release.
   with ARP shown for each hop and MAC learning on switches.
 - Ping, unicast and multicast with packet animation; graph mode for pure
   connectivity.
+- Adjustable packet animation (`speed slow|normal|fast|<multiplier>`): a shared
+  pace scales to long paths while preserving multicast branching. Normal speed
+  targets about 1.5 seconds per longest active one-way path.
 - Cable roles (data, control, fabric) and failure injection.
 - HA router clusters: virtual gateways, failover, split-brain detection,
   quorum and witness policies.

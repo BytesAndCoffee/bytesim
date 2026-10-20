@@ -387,6 +387,22 @@ cable crossings it took, compared with sending a separate unicast to each
 receiver. A device blinks when a packet arrives, and the cables in use stay
 highlighted until the packet is delivered.
 
+Packet animation scales with path length so large layouts stay responsive.
+The animation targets 60 fps. At normal speed, the longest active one-way path
+takes about 1.5 seconds. Multicast requests move together until their paths split.
+
+```text
+speed slow        half speed, for following packets closely
+speed normal      default playback speed (1x)
+speed fast        three times normal speed
+speed 0.75        choose your own multiplier (0.1–10; `speed 2x` also works)
+speed             show the current speed
+```
+
+Changes apply to packets already in flight. Speed is a session preference,
+retained when loading or clearing a network. It controls animation timing;
+`traffic rate` still controls how many background packets are generated.
+
 ## Random traffic
 
 ```text
@@ -754,6 +770,7 @@ them, and a group name on its own selects the group.
 | `multicast <src> <dst…>` | `mcast` | one-to-many packet |
 | `mode graph\|addr` | | graph or address mode |
 | `traffic on [rate] [seed=] [hosts=] [mix=]`, `traffic [off\|rate n\|reset]` | | random background traffic and statistics |
+| `speed [slow\|normal\|fast\|0.1..10]` | | set or show packet animation speed; normal is 1x |
 | `broadcast <id[:port]>` | `bcast`, `flood` | flood one frame (storms in a live loop) |
 | `lag`, `lag auto`, `lag <switch\|domain> <switch\|router\|gateway\|domain>`, `unlag …`, `lags` | | find and bundle aggregatable spans |
 | `mlag <group…>`, `unmlag <group>`, `mlags` | | make a group of switches act as one (needs peer links) |
