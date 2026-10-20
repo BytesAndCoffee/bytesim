@@ -63,6 +63,7 @@ class ByteSimApp(ConsoleCommands, TopologyCommands, GroupCommands, AddressComman
         self._log_file = log_file
         self._ha_seen: dict = {}
         self._commands = collect(type(self))
+        self._heap_frozen: bool | None = False   # None once unmounted: settle no more
 
     def compose(self) -> ComposeResult:
         with Horizontal(id="main"):
@@ -97,14 +98,21 @@ class ByteSimApp(ConsoleCommands, TopologyCommands, GroupCommands, AddressComman
 
     def settle_heap(self) -> None:
         """Collect once, then exempt what survives (widgets, the network) from later
-        collections: full collections otherwise rescan it all and stall animation."""
+        collections: full collections otherwise rescan it all and stall animation.
+        The freeze is process-wide, so ``on_unmount`` lifts it again."""
+        if self._heap_frozen is None:
+            return
         gc.unfreeze()                        # release what an earlier network left behind
         gc.collect()
         gc.freeze()
+        self._heap_frozen = True
 
     # ---- shared helpers (used by the canvas and the command mixins) ----
     def on_unmount(self) -> None:
         self.close_console_log()
+        if self._heap_frozen:                # let a host process collect the app again
+            gc.unfreeze()
+        self._heap_frozen = None
 
     def log_msg(self, msg: str) -> None:
         if self.replaying:                   # a script is running: keep the console quiet
