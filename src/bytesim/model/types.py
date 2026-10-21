@@ -27,13 +27,14 @@ class Iface:
     host: int | None = None
     gw: int | None = None       # gateway's host number, on the same network
     via: str = ""
+    lease: float | None = None  # when a DHCP lease runs out (simulated clock)
 
     @property
     def addr(self) -> tuple[int, int] | None:
         return (self.net, self.host) if self.host is not None and self.net is not None else None
 
     def clear(self) -> None:
-        self.net = self.host = self.gw = None
+        self.net = self.host = self.gw = self.lease = None
         self.via = ""
 
 

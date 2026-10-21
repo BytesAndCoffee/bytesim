@@ -633,3 +633,89 @@ def test_the_outside_has_no_route_into_a_nat_lan():
     assert inside not in net.routing_table("g1")
     assert inside in net.routing_table("g1", nat=False)
     assert inside in net.routing_table("g3")
+
+
+# ---- DHCP leases -------------------------------------------------------------------------
+
+def dhcp_lan(clients=2):
+    kinds = ["r", ("s", 8)] + ["c"] * clients
+    return build(kinds, [("r1", "s1")] + [("s1", f"c{i}") for i in range(1, clients + 1)])
+
+
+def test_each_client_gets_a_unique_lease_the_server_remembers():
+    net = dhcp_lan(3)
+    hosts = [net.iface(f"c{i}", 1).host for i in (1, 2, 3)]
+    assert len(set(hosts)) == 3
+    binds = net.dhcp_leases["r1:1"]
+    assert {b["host"] for b in binds.values()} == set(hosts)
+    assert all(net.iface(f"c{i}", 1).lease == 3600 for i in (1, 2, 3))
+
+
+def test_clients_renew_at_half_time_and_keep_their_address():
+    net = dhcp_lan()
+    r = ScriptRunner(net)
+    before = net.iface("c1", 1).addr
+    r.run("wait 1799")
+    assert net.iface("c1", 1).lease == 3600
+    r.run("wait 1")
+    assert "c1:nic1 renewed (1,10) with r1" in plain(r)
+    assert net.iface("c1", 1).addr == before and net.iface("c1", 1).lease == 5400
+    r.run("wait 10h")
+    assert net.iface("c1", 1).addr == before
+
+
+def test_a_lease_runs_out_when_no_server_answers():
+    net = dhcp_lan()
+    r = ScriptRunner(net)
+    r.run("dhcpd r1 off\nwait 3599")
+    assert net.iface("c1", 1).via == "dhcp"
+    r.run("wait 1")
+    assert "lease on (1,10) expired (no server answered), released" in plain(r)
+    assert net.iface("c1", 1).via == "adhoc" and "r1:1" not in net.dhcp_leases
+
+
+def test_an_address_found_in_use_is_declined():
+    net = dhcp_lan()
+    r = ScriptRunner(net)
+    r.run("release c1\nip c2 (1,10) 1\nip c1 dhcp\ndhcp c1")
+    text = plain(r)
+    assert "DECLINE (1,10): an ARP probe found it in use" in text
+    assert net.iface("c1", 1).addr == (1, 12)
+
+
+def test_a_pool_runs_out():
+    kinds = ["r"] + [("s", 64)] * 5 + ["c"] * 245
+    cables = [("r1", "s1"), ("s1", "s2"), ("s2", "s3"), ("s3", "s4"), ("s4", "s5")]
+    cables += [(f"s{1 + i // 58}", f"c{i + 1}") for i in range(245)]
+    net = build(kinds, cables)
+    assert len({net.iface(f"c{i}", 1).host for i in range(1, 245)}) == 244
+    assert net.iface("c245", 1).via == "adhoc" or net.iface("c245", 1).addr is None
+
+
+def test_a_client_keeps_its_binding_across_an_unplug():
+    net = dhcp_lan(2)
+    r = ScriptRunner(net)
+    mine = net.iface("c1", 1).host
+    r.run("unlink c1")
+    net.reconcile()
+    assert net.iface("c1", 1).addr is None
+    net.add("c")
+    r.run("c3 s1")
+    net.reconcile()
+    assert net.iface("c3", 1).host != mine                     # c1's binding is still held for it
+    r.run("c1 s1")
+    net.reconcile()
+    assert net.iface("c1", 1).host == mine
+
+
+def test_no_lease_across_a_router_without_a_server_on_the_link():
+    net = build(["r", "s", "c", "s", "c"], [("r1", "s1"), ("s1", "c1"), ("s2", "c2")])
+    assert net.iface("c1", 1).via == "dhcp" and net.iface("c2", 1).via == "adhoc"
+
+
+def test_the_clock_and_leases_survive_a_save():
+    from bytesim.model import Network as N
+    net = dhcp_lan()
+    ScriptRunner(net).run("wait 100")
+    back = N.from_json(net.to_json())
+    assert back.clock == 100 and back.iface("c1", 1).lease == 3600

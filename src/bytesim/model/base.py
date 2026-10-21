@@ -27,6 +27,9 @@ class NetworkBase:
         #   interface -> {address: (interface that has it, clock when the entry expires)}
         self.nat_table: dict[str, list[dict]] = {}   # NAT gateway -> its live mappings (see wan.py)
         self._ports = 0                           # ephemeral source ports handed out so far
+        self.dhcp_leases: dict[str, dict[str, dict]] = {}   # server "r1:2" -> {client "c1:1": {host, expires}}
+        self.dhcp_declined: dict[str, dict[int, float]] = {}  # server -> {host: clock until it's offered again}
+        self.dhcp_notes: list[str] = []           # what the last lease() exchanged (DECLINEs)
         self.clock = 0.0                          # simulated seconds; `wait` and the app advance it
         self._nics_up: set[tuple] | None = None   # (computer, port, far end) live at the last reconcile
         self.clusters: dict[str, str] = {}        # HA cluster (a group of routers) -> split policy

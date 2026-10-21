@@ -120,6 +120,11 @@ class NamingMixin(NetworkBase):
         self.stp_priority = {ren(d): v for d, v in self.stp_priority.items()}
         self.stp_cost = {(ren(d), p): c for (d, p), c in self.stp_cost.items()}
         self.static_routes = {ren(d): r for d, r in self.static_routes.items()}
+        def rk(key: str) -> str:
+            d, _, p = key.partition(":")
+            return f"{ren(d)}:{p}"
+        self.dhcp_leases = {rk(s): {rk(c): b for c, b in binds.items()} for s, binds in self.dhcp_leases.items()}
+        self.dhcp_declined = {rk(s): v for s, v in self.dhcp_declined.items()}
         self.nat_table = {ren(g): [{**m, "remote": ren(m["remote"]) if m["remote"] in self.devices else m["remote"]}
                                    for m in maps] for g, maps in self.nat_table.items()}
         self.stp_blocked = {(ren(d), p) for d, p in self.stp_blocked}

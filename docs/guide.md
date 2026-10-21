@@ -361,13 +361,25 @@ port; the (network, host) pair is its logical address.
 - **Computers use DHCP** by default. Cabling a computer starts an exchange you
   can watch: a yellow DISCOVER spreads to every interface on the segment, then
   a green OFFER/ACK comes back from a router. Leases start at host 10, and the
-  gateway is the router's host number.
+  gateway is the router's host number. A router serves only the networks it's
+  on (there are no DHCP relays), so a segment without one gets no lease.
+- **The server keeps bindings**: it offers a client the address it already
+  holds for it, else the lowest free one in its pool (hosts 10–253). Before
+  taking an offer the client ARP-probes it; if something on its link already
+  has the address (a static host, say), it declines (`DECLINE (1,10)`) and the
+  server offers the next. A full pool leaves the client without a lease.
+- **Leases last an hour** of simulated time (`wait`). A client renews at
+  half-time and keeps its address; if its server doesn't answer, the lease
+  runs out, is released and the client goes ad-hoc. `ip` shows what's left.
 - **Ad-hoc:** if no DHCP server answers, the computer takes an unused host on
   its local network, or opens a new network if it's the first one there. A
   pair of computers cabled directly works this way. When a router appears
   later, ad-hoc hosts switch to DHCP and keep their host number.
-- Unplugging a computer releases its address. If a DHCP server is switched off
-  or becomes unreachable, clients keep their existing leases.
+- Unplugging a computer releases its address on the computer, but its server
+  keeps the binding until the lease would have run out, so plugging it back
+  in gets the same address. `release` tells the server (a RELEASE). If a
+  server is switched off or becomes unreachable, clients keep their leases
+  until they expire.
 
 ```text
 ip                         table of every interface: MAC, network, host, mode, gateway
@@ -1188,7 +1200,9 @@ canvas.
 
 ByteSim models the behaviours above and deliberately skips the rest:
 
-- Leases never expire, and HA coordination is instant (no heartbeat timers).
+- HA coordination is instant (no heartbeat timers). Timers are fixed: leases
+  last an hour, ARP entries a minute, MAC entries five minutes, NAT mappings a
+  minute after their last packet.
 - Routing converges instantly and counts cables, not link speeds. Network ids
   aren't prefixes, so a table has exact networks and a default route (the
   only two prefix lengths there are).

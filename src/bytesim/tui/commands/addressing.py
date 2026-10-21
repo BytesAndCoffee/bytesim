@@ -4,6 +4,7 @@ from __future__ import annotations
 from rich.markup import escape
 
 
+from ...constants import LEASE_TIME
 from ...model import Device, Iface, NetError, fmt
 from ..inspector import mode_text
 from .base import CommandHost
@@ -29,6 +30,7 @@ class AddressCommands(CommandHost):
             ifc = self.net.iface(*nic)
             if ifc.addr:
                 self.log_msg(f"[#ffd700]DHCP[/] {self._ifname(nic)} RELEASE {fmt(ifc.addr)}")
+            self.net.dhcp_release(nic)
             ifc.mode = "none"
             ifc.clear()
         self.changed()
@@ -153,6 +155,7 @@ class AddressCommands(CommandHost):
             self.log_msg("  [red]DHCP failed: the DISCOVER drowned in the storm it caused[/]")
             return
         kind, server = net.lease(nic)
+        declined = list(net.dhcp_notes)
         net.learn_flood(fl)
         reached = len(fl.delivered)
         self.log_msg(f"[b #ffd700]DHCP[/] {name} [dim]{mac}[/] DISCOVER → broadcast "
@@ -166,9 +169,12 @@ class AddressCommands(CommandHost):
                 self.log_msg(f"  [yellow]no DHCP server answered: took free address "
                              f"{fmt(ifc.addr)} on network {ifc.net} (ad-hoc)[/]")
             else:
-                verb = "ACK (renewed)" if kind == "renew" else "OFFER → REQUEST → ACK"
+                for note in declined:
+                    self.log_msg(f"  [yellow]{escape(note)}[/]")
+                verb = "REQUEST → ACK (renewed)" if kind == "renew" else "OFFER → REQUEST → ACK"
                 self.log_msg(f"  [#ffd700]{verb}[/] from {server[0]} {fmt(net.addr_of(server))}: "
-                             f"network {ifc.net} → host {ifc.host}, gateway {ifc.gw}")
+                             f"network {ifc.net} → host {ifc.host}, gateway {ifc.gw}, "
+                             f"lease {LEASE_TIME / 60:.0f} min")
             self.refresh_sidebar()
             c.refresh()
 
@@ -258,5 +264,7 @@ class AddressCommands(CommandHost):
         host = str(ifc.host) if ifc.addr else "—"
         gw = str(ifc.gw) if ifc.gw is not None else ""
         state = "" if cabled else " [dim](no cable)[/]"
+        if ifc.via == "dhcp" and ifc.lease is not None and ifc.addr:
+            state += f" [dim](lease {max(0.0, ifc.lease - self.net.clock) / 60:.0f} min left)[/]"
         self.log_msg(f"[{d.color}]{d.id + ':' + d.port_name(p):<9}[/] {d.mac(p):<7} {net:>3}  {host:>4}  "
                      f"{mode_text(ifc):<10} {gw}{state}")

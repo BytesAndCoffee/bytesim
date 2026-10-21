@@ -60,6 +60,9 @@ class Network(GroupsMixin, Layer2Mixin, AddressingMixin, ArpMixin, RoutingMixin,
         self.stp_priority.pop(dev.id, None)
         self.stp_cost = {k: v for k, v in self.stp_cost.items() if k[0] != dev.id}
         self.static_routes.pop(dev.id, None)
+        for key in [k for k in self.dhcp_leases if k.split(":")[0] == dev.id]:   # a client's binding outlives it
+            del self.dhcp_leases[key]
+        self.dhcp_declined = {k: v for k, v in self.dhcp_declined.items() if k.split(":")[0] != dev.id}
         self.storming.discard(dev.id)
         self.mac_flaps.pop(dev.id, None)
         self.forget_macs({dev.id})
@@ -123,7 +126,7 @@ class Network(GroupsMixin, Layer2Mixin, AddressingMixin, ArpMixin, RoutingMixin,
         self.age_macs()
         self.age_arp()
         self.age_nat()
-        return []
+        return self.age_leases()
 
     # ---- persistence ---------------------------------------------------
     def to_json(self) -> str:
@@ -152,6 +155,7 @@ class Network(GroupsMixin, Layer2Mixin, AddressingMixin, ArpMixin, RoutingMixin,
             "nat_hard": sorted(self.nat_hard, key=lambda d: int(d[1:])),
             "overlays": self.overlay_state(),
             "relays": self.relays,
+            "clock": self.clock,
         }, indent=2)
 
     @classmethod
@@ -206,4 +210,5 @@ class Network(GroupsMixin, Layer2Mixin, AddressingMixin, ArpMixin, RoutingMixin,
         net.nat_hard = {d for d in data.get("nat_hard", []) if d in net.devices and net.devices[d].kind == "g"}
         net.load_overlays(data.get("overlays", {}))
         net.relays = [d for d in data.get("relays", []) if d in net.devices]
+        net.clock = float(data.get("clock", 0.0))
         return net
