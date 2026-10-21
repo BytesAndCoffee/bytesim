@@ -631,3 +631,22 @@ def test_mping_replies_through_an_exit_node_report_their_own_endpoints():
     for d in ("c8",):
         ends, _, note = got[d, "c1"]
         assert ends.endswith("→ c1:nic1 (7,10)") and note == "a reply: back along the request's path to c1"
+
+
+@pytest.mark.parametrize("name", ["Off", "REMOVE", "Internet"])
+def test_saves_drop_overlays_named_like_reserved_words_in_any_case(name):
+    net = runner().net
+    state = net.overlay_state()
+    state[name] = dict(state["ol"], net=105)
+    net.load_overlays(state)
+    assert set(net.overlays) == {"ol"}
+
+
+def test_a_save_loads_even_when_no_overlay_network_is_free():
+    net = runner().net
+    nics = [k for k in net.ifaces if net.ifaces[k].addr][:10]   # an older save: every overlay network in use
+    assert len(nics) == 10
+    for nic, ov_net in zip(nics, range(100, 110)):
+        net.ifaces[nic] = Iface(mode="static", via="static", net=ov_net, host=1)
+    back = Network.from_json(json.loads(json.dumps(net.to_json())))
+    assert back.overlays == {} and back.ifaces[nics[0]].net == 100

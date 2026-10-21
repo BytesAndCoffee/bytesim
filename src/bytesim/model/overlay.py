@@ -141,13 +141,18 @@ class OverlayMixin(NetworkBase):
         names = set(self.devices) | set(self.groups) | {"*", "internet"}  # type: ignore[attr-defined]
         self.overlays = {}
         for ov, v in data.items():
-            if not isinstance(v, dict) or not GROUP_NAME.match(ov) or REF.match(ov) or ov in OVERLAY_RESERVED:
+            ov = str(ov).lower()                          # commands read names case-insensitively
+            if (not isinstance(v, dict) or not GROUP_NAME.match(ov) or REF.match(ov)
+                    or ov in OVERLAY_RESERVED or ov in self.overlays):
                 continue
             net_id = v.get("net")
             if (net_id not in OVERLAY_NETS or net_id in {t["net"] for t in self.overlays.values()}
                     or net_id in self._physical_nets()):
                 net_id = None
-            t = self.new_overlay(ov, net_id)
+            try:
+                t = self.new_overlay(ov, net_id)
+            except NetError:                              # no free overlay network: drop it, keep the rest
+                continue
             hosts = v.get("hosts", {})
             for d in v.get("members", []):
                 if d in self.devices and self.devices[d].kind != "s":
