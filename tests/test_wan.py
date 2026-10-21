@@ -32,7 +32,7 @@ def test_only_site_gateways_have_wan_ports_and_run_nat():
 def test_outbound_is_translated_and_its_reply_comes_back():
     r = runner()
     r.run("ping c1 c7")
-    assert "NAT at g3: (" in text(r) and "(its WAN address)" in text(r)
+    assert "NAT at g3: (6,10):" in text(r) and "(its WAN address" in text(r)
     assert "reply from c7" in text(r)
 
 

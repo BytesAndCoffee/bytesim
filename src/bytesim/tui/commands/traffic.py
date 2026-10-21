@@ -201,14 +201,15 @@ class TrafficCommands(CommandHost):
             raise NetError(f"{dev.id} has no port {port} (it has {dev.nports})")
         return dev.id, port
 
-    def _plan(self, src: str, tok: str, reply: bool = False,
-              port: int | None = None) -> tuple[str, list[tuple[str, int]], list[Leg] | None, bool]:
+    def _plan(self, src: str, tok: str, reply: bool = False, port: int | None = None,
+              remote: str | None = None) -> tuple[str, list[tuple[str, int]], list[Leg] | None, bool]:
         """Work out how a packet gets from src to tok: (label, device path, legs, to-internet).
 
         In graph mode it's the shortest cable path; in address mode it follows
         networks and gateways, and legs records each layer-2 hop. A ``reply`` belongs
-        to a flow the other side started, so NAT lets it back in. A ``port`` sends
-        from that interface of src."""
+        to a flow the other side started: it opens no NAT mappings, and gets back in
+        through the ones its request made (from ``remote``, src unless the reply comes
+        from the internet). A ``port`` sends from that interface of src."""
         net = self.net
         internet = tok.lower() in self.INTERNET
         if self.graph:
@@ -265,14 +266,17 @@ class TrafficCommands(CommandHost):
                         if c is not None:
                             self._last_dst = c
                         return label, self._flatten(legs), legs, c is None
-                try:
-                    legs = self._best_route(src, cands, port)
-                except NetError as e:
-                    hint = self.storm_hint(src, *(c[0] for c in cands or []))  # type: ignore[attr-defined]
-                    raise NetError(f"{e}{hint}") from None
-                if not reply and (blocked := net.nat_block(legs)):
-                    raise NetError(blocked)
-                net.notes.extend(net.nat_notes(legs))
+                legs = self._nat_return(src, cands, remote or src)
+                if legs is None:
+                    try:
+                        legs = self._best_route(src, cands, port)
+                    except NetError as e:
+                        if (blocked := self._nat_explain(src, cands)) is not None:
+                            raise NetError(blocked) from None
+                        hint = self.storm_hint(src, *(c[0] for c in cands or []))  # type: ignore[attr-defined]
+                        raise NetError(f"{e}{hint}") from None
+                    if not reply:
+                        net.notes.extend(net.nat_open(legs, cands[0][0] if cands else "internet", net.ephemeral()))
             # Every hop starts with ARP, up to the router where the TTL runs out.
             # Share structural indexes with routing, but leave the scope before
             # setting off a storm (a model mutation).
@@ -306,6 +310,23 @@ class TrafficCommands(CommandHost):
             raise NetError(f"TTL expired at {legs[TTL - 1][1][0]}, the {TTL}th router "
                            f"(time exceeded: {len(legs) - 1} routers on the way)")
         return label, self._flatten(done), done, internet
+
+    def _nat_return(self, src: str, cands: list[tuple[str, int]] | None, remote: str) -> list[Leg] | None:
+        """Traffic back to an inside host on a flow it started: through the NAT mappings."""
+        for c in cands or []:
+            if (hit := self.net.nat_return(src, remote, c)) is not None:
+                legs, notes = hit
+                self.net.notes.extend(notes)
+                self._last_dst = c
+                return legs
+        return None
+
+    def _nat_explain(self, src: str, cands: list[tuple[str, int]] | None) -> str | None:
+        """Why a destination behind NAT can't be reached from src, if that's the reason."""
+        for c in cands or []:
+            if (why := self.net.nat_drop(src, c)) is not None:
+                return why
+        return None
 
     def _arp_probe(self, src: str, addr: tuple[int, int], port: int | None) -> tuple[list[Leg], tuple[str, int]]:
         """For an address nobody has: the hops to the interface that asks for it by
@@ -504,7 +525,8 @@ class TrafficCommands(CommandHost):
                         raise NetError("a cable on the way back failed while the request was out")
                     back = self._flatten(back_legs)
                 else:
-                    _, back, back_legs, _ = self._plan(path[-1][0], fmt(self.net.addr_of(legs[0][0])), reply=True)
+                    _, back, back_legs, _ = self._plan(path[-1][0], fmt(self.net.addr_of(legs[0][0])), reply=True,
+                                                       remote="internet" if internet else None)
             except NetError as e:
                 if self.trace_enabled:
                     self._log_path_trace_failure("REPLY", label, src, e)

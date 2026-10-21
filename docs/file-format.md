@@ -67,7 +67,8 @@ template-based YAML format, see [topology-format.md](topology-format.md).
 | `overlays` | overlay → `net` (overlay network, 100–109), `members` (join order), `hosts` (member → overlay host number; missing ones are numbered in join order), and optionally `coord`, `exit`, `lan`, `routes` (subnet routers) and `acl` (`[from, to]` pairs; an empty list allows nothing, a missing one everything) |
 | `relays` | devices that relay overlay traffic, in preference order |
 
-Blocked ports and storms aren't saved: blocked ports are recomputed when a file
+Runtime state isn't saved: MAC tables, ARP caches, NAT mappings and the clock
+start empty when a file is loaded, as after a restart. Blocked ports and storms aren't saved either: blocked ports are recomputed when a file
 is loaded, and a storm only starts when traffic is sent.
 
 Entries that refer to missing devices or groups are dropped on load, and so

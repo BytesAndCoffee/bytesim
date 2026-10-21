@@ -310,6 +310,7 @@ class TopologyCommands(CommandHost):
             if not up:                            # a failed device comes back empty, like a reboot
                 net.arp_forget(d.id)
                 net.forget_macs({d.id})
+                net.nat_forget(d.id)
             self.log_msg(f"[{'green' if up else 'red'}]{'✓' if up else '✕'} {d.id} {verb}[/]")
         else:
             for l in self._links_matching(args):

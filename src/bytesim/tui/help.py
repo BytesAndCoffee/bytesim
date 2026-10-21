@@ -69,7 +69,7 @@ HELP = """\
   [cyan]cluster[/] <name>  ·  [cyan]clusters[/]  ·  [cyan]uncluster[/] <name>  ·  [cyan]demo ha[/]
 [b]Internet and NAT[/]
   [cyan]internet[/] <group> | off  ·  [cyan]internet[/]   that group is the public internet; gateways cabled to it face it
-  [cyan]nat[/] <gateway…> on|off|easy|hard  ·  [cyan]demo internet[/]   NAT (on, easy by default) drops unsolicited inbound traffic
+  [cyan]nat[/] <gateway…> on|off|easy|hard  ·  [cyan]nat[/] <gateway>  ·  [cyan]demo internet[/]   stateful NAT (on, easy by default): mappings, replies in, unsolicited dropped
   [cyan]overlay[/] <name> <device|group…> \\[host=n] · [cyan]overlay[/] <name> remove … · [cyan]overlay off[/] <name> · [cyan]overlay[/] \\[<name>]
                                     overlay addresses (100,n) that reach each other through NAT: [cyan]ping c1 c3@<name>[/] · [cyan]ping c1 all@<name>[/]
   [cyan]overlay[/] <name> peers <member>  ·  [cyan]demo overlay[/]   how one member connects to each of the others

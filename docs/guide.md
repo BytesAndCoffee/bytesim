@@ -923,13 +923,24 @@ internet group. An uplink through a private router or through another NAT
 counts. A LAN that happens to reach the internet through a second gateway
 doesn't. Failures don't change which side is which.
 
-A gateway with a WAN port runs **NAT**:
-- **Going out:** traffic from its LAN leaves with the gateway's WAN address. The
-  trace says `NAT at g3: (6,10) leaves as (2,2)`.
-- **Coming in:** a packet arriving on a WAN port isn't forwarded onto the LAN
-  unless it's a reply to something that went out. Otherwise it's dropped,
-  with the reason: `dropped by g4's NAT: unsolicited inbound traffic …`.
-- **Behind another NAT** (double NAT), each NAT translates in turn.
+A gateway with a WAN port runs **NAT**, and keeps a table of mappings:
+- **Going out:** each new flow (a ping, a unicast) gets a source port, and the
+  gateway maps it to a public port on its WAN address:
+  `NAT at g3: (6,10):49152 leaves as (2,2):40000`. Two hosts going to the same
+  place get different public ports. An easy NAT reuses a flow's public port
+  whatever it talks to; a hard NAT picks a new one per destination.
+- **Coming back:** replies (and anything else the remote sends back on that
+  flow) are addressed to the public port and translated through the mapping,
+  so they reach the host that started the flow. A mapping lasts 60 seconds
+  after its last packet (`wait 61` and it's gone), and a gateway that fails
+  loses its mappings.
+- **Coming in uninvited:** the gateway doesn't advertise its LAN to the
+  internet, so nothing outside has a route in. ByteSim says which NAT is in
+  the way: `dropped by g4's NAT: unsolicited inbound traffic …`.
+- **Behind another NAT** (double NAT), each NAT translates in turn, and
+  replies are translated back outermost first.
+
+`nat g3` lists a gateway's mappings and when each expires.
 
 With an internet declared, `ping c1 internet` has to reach one of its gateways.
 Random traffic counts NAT drops separately.
@@ -1190,8 +1201,11 @@ ByteSim models the behaviours above and deliberately skips the rest:
   under another name; it doesn't send probes with rising TTLs.
 - MAC entries never age out, and only a dead cable makes a switch forget one
   (or removing a cable, which clears every table).
-- NAT decides only what gets through. Addresses stay globally unique (there are
-  no overlapping private ranges), and there are no port forwards.
+- NAT maps addresses and ports but not protocols: ping and unicast flows are
+  mapped alike, and nothing rewrites checksums. Addresses stay globally unique
+  (there are no overlapping private ranges), and there are no port forwards.
+- Overlay tunnels decide hole punching from the NAT types (easy or hard)
+  rather than by exchanging probe packets.
 - Hole punching works unless both ends are behind hard NAT; real mesh VPNs
   sometimes get through even then (port mapping, port guessing).
 - An overlay has one exit node, used by every member, and access rules have no

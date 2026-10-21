@@ -51,12 +51,27 @@ class WanCommands(CommandHost):
                    else "[yellow]NAT off[/] (inside is reachable)")
             self.log_msg(f"  {g}: WAN {wan} · {nat}")
 
+    def _show_mappings(self, g: str) -> None:
+        net = self.net
+        maps = [m for m in net.nat_table.get(g, []) if m["expires"] > net.clock]
+        if not maps:
+            self.log_msg(f"[dim]{g}: no NAT mappings[/]")
+            return
+        self.log_msg(f"[b]{g} NAT mappings[/] ({'hard' if g in net.nat_hard else 'easy'} NAT)")
+        for m in maps:
+            (ia, ip), (pa, pp) = m["inside"], m["public"]
+            self.log_msg(f"  {fmt(ia)}:{ip} ⇄ {fmt(pa)}:{pp}  with {m['remote']}  "
+                         f"[dim](expires in {m['expires'] - net.clock:.0f}s)[/]")
+
     @command("nat")
     def cmd_nat(self, args: list[str], opts: dict[str, str]) -> None:
-        """nat: list · nat <gateway…> on|off · nat <gateway…> easy|hard."""
+        """nat: list · nat <gateway>: its mappings · nat <gateway…> on|off · nat <gateway…> easy|hard."""
         net = self.net
         if not args:
             self._show_internet()
+            return
+        if len(args) == 1:
+            self._show_mappings(net.get(self._ref(args[0])[0]).id)  # type: ignore[attr-defined]
             return
         state = args[-1].lower()
         if state not in ("on", "off", "easy", "hard") or len(args) < 2:

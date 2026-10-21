@@ -45,6 +45,7 @@ TTL = 64                                      # a packet's starting TTL; every r
 
 MAC_AGE = 300.0                               # seconds a switch keeps a MAC it hasn't heard from
 ARP_AGE = 60.0                                # seconds an interface keeps an ARP answer
+NAT_IDLE = 60.0                               # seconds a NAT mapping lives without traffic
 
 OVERLAY_NETS = range(100, 110)                # overlay networks, one per overlay (a nod to 100.x)
 

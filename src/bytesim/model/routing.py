@@ -36,13 +36,15 @@ class RoutingMixin(NetworkBase):
     _rib: tuple | None = None   # (routing state, router graph, {router: table}); rebuilt when the state moves
 
     @route_query
-    def route(self, src: str, dst: tuple[str, int] | None, port: int | None = None) -> list[Leg]:
+    def route(self, src: str, dst: tuple[str, int] | None, port: int | None = None,
+              nat: bool = True) -> list[Leg]:
         """Path from a device to an interface (or to the internet if dst is None).
 
         Each leg is one layer-2 hop between addressed interfaces. A host delivers
         directly on its own network, otherwise via its gateway; routers forward by
         their tables. A ``port`` binds a computer's packet to that interface (like
-        ``ping -I``).
+        ``ping -I``). ``nat=False`` routes as if NAT gateways advertised their LANs:
+        the path a packet takes once a mapping (or a punched hole) lets it in.
 
         Where several next hops are equally cheap, the flow (source and destination)
         picks one at each router: the same flow always takes the same path, different
@@ -61,7 +63,7 @@ class RoutingMixin(NetworkBase):
         dst_addr = self.addr_of(dst) if dst else None
         flow = f"{src}>{dst[0] if dst else 'internet'}"
         if dev.kind in "rg":
-            return self._router_route(src, dst, dst_addr, flow)
+            return self._router_route(src, dst, dst_addr, flow, nat)
         nics = self.addressed(src)
         if port is not None:
             nics = [(p, ifc) for p, ifc in nics if p == self.lag_primary(src, port)]
@@ -104,7 +106,7 @@ class RoutingMixin(NetworkBase):
                 continue
             try:
                 return ([((src, p), gw, self.l2path((src, p), gw, flow))]
-                        + self._router_route(gw[0], dst, dst_addr, flow))
+                        + self._router_route(gw[0], dst, dst_addr, flow, nat))
             except NetError as e:
                 problems.append(str(e))
         if problems:
@@ -114,7 +116,7 @@ class RoutingMixin(NetworkBase):
         raise NetError(f"{where} isn't local to {who} and {who} has no gateway")
 
     def _router_route(self, start: str, dst: tuple[str, int] | None,
-                      dst_addr: tuple[int, int] | None, flow: str = "") -> list[Leg]:
+                      dst_addr: tuple[int, int] | None, flow: str = "", nat: bool = True) -> list[Leg]:
         """Forward from a router, one table lookup per router, to dst (or out to the
         internet). A routing loop (from static routes) runs until the TTL would expire."""
         legs: list[Leg] = []
@@ -122,7 +124,7 @@ class RoutingMixin(NetworkBase):
         while len(legs) <= TTL:
             if dst is not None and dst[0] == u:
                 return legs
-            table = self.routing_table(u)
+            table = self.routing_table(u, nat)
             if dst is None:
                 route = table.get(DEFAULT)
                 if route is None:
@@ -183,13 +185,13 @@ class RoutingMixin(NetworkBase):
             memo["rib"] = self._rib[1], self._rib[2]
         return self._rib[1], self._rib[2]
 
-    def routing_table(self, router: str) -> dict[int, Route]:
+    def routing_table(self, router: str, nat: bool = True) -> dict[int, Route]:
         """A router's table: network id (DEFAULT for the default route) -> Route."""
         graph, tables = self._tables()
-        if router not in tables:
+        if (router, nat) not in tables:
             with self.remembering():  # type: ignore[attr-defined]
-                tables[router] = self._build_table(router, graph)
-        return tables[router]
+                tables[router, nat] = self._build_table(router, graph, nat)
+        return tables[router, nat]
 
     def _router_graph(self) -> dict[str, list[tuple[int, tuple[str, int], tuple[str, int]]]]:
         """Each live router's neighbours: (cable hops, its interface, theirs). What a
@@ -210,10 +212,15 @@ class RoutingMixin(NetworkBase):
                             out.append((len(path) - 1, (d.id, p), e))
         return graph
 
-    def _build_table(self, u: str, graph: dict) -> dict[int, Route]:
+    def _build_table(self, u: str, graph: dict, nat: bool = True) -> dict[int, Route]:
         standby = self.standby_routers()  # type: ignore[attr-defined]
         dist: dict[str, int] = {u: 0}
         first: dict[str, set] = {u: set()}
+        entered: dict[str, int | None] = {u: None}      # the port each router is first reached by
+
+        def hidden(v: str, port: int) -> bool:          # behind v's NAT, seen from its WAN side
+            return nat and v != u and self.nat_hides(v, entered[v], port)  # type: ignore[attr-defined]
+
         heap: list[tuple[int, str]] = [(0, u)]
         done: list[str] = []
         while heap:
@@ -226,10 +233,10 @@ class RoutingMixin(NetworkBase):
             for c, a, e in graph.get(v, []):
                 w, nc = e[0], cost + c
                 hops = {(a, e)} if v == u else first[v]
-                if not self.advertises(e[0], a, v):  # type: ignore[attr-defined]
+                if hidden(v, a[1]):
                     continue
                 if nc < dist.get(w, 10**9):
-                    dist[w], first[w] = nc, set(hops)
+                    dist[w], first[w], entered[w] = nc, set(hops), e[1]
                     heapq.heappush(heap, (nc, w))
                 elif nc == dist[w]:
                     first[w] |= hops
@@ -243,7 +250,7 @@ class RoutingMixin(NetworkBase):
                     continue
                 if v == u:
                     table.setdefault(ifc.net, Route("connected"))
-                elif self.reveals(v, p, u):  # type: ignore[attr-defined]
+                elif not hidden(v, p):
                     attached.setdefault(ifc.net, []).append(v)
         for net, vs in attached.items():
             if net in table:

@@ -64,6 +64,7 @@ class Network(GroupsMixin, Layer2Mixin, AddressingMixin, ArpMixin, RoutingMixin,
         self.mac_flaps.pop(dev.id, None)
         self.forget_macs({dev.id})
         self.arp_forget(dev.id)
+        self.nat_forget(dev.id)
         return before - len(self.links)
 
     def resize(self, dev_id: str, nports: int) -> None:
@@ -121,6 +122,7 @@ class Network(GroupsMixin, Layer2Mixin, AddressingMixin, ArpMixin, RoutingMixin,
         self.clock += seconds
         self.age_macs()
         self.age_arp()
+        self.age_nat()
         return []
 
     # ---- persistence ---------------------------------------------------

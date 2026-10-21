@@ -576,3 +576,60 @@ def test_static_routes_survive_saves_exports_and_topologies():
     exported = synthesize(net)
     assert "route r1 9 drop" in exported.script and "route r1 default via (2,2)" in exported.script
     assert not exported.limitations
+
+
+# ---- stateful NAT ---------------------------------------------------------------------
+
+def internet():
+    from bytesim import demos
+    net, _ = demos.internet()
+    net.reconcile()
+    return net, ScriptRunner(net, detail=True)
+
+
+def test_two_inside_hosts_get_distinct_mappings_and_their_own_replies():
+    net, r = internet()
+    r.run("ping c1 c7\nping c2 c7")
+    maps = net.nat_table["g3"]
+    assert {m["inside"][0] for m in maps} == {(6, 10), (6, 11)}
+    assert len({m["public"] for m in maps}) == 2
+    assert {m["public"][0] for m in maps} == {net.addr_of(("g3", p)) for p in net.wan_ports("g3")}
+    assert plain(r).count("  reply from c7") == 2
+    _, back, legs, _ = r._plan("c7", "(6,11)", reply=True)
+    assert legs[-1][1] == ("c2", 1)
+
+
+def test_the_return_direction_of_a_flow_gets_in_until_its_mapping_expires():
+    net, r = internet()
+    with pytest.raises(NetError, match="dropped by g3's NAT: unsolicited inbound"):
+        r.run("unicast c7 c1")
+    r.run("unicast c1 c7\nunicast c7 c1")
+    assert "delivered to c1" in plain(r) and "the mapping (6,10)'s flow made" in plain(r)
+    r.run("wait 61")
+    assert not net.nat_table
+    with pytest.raises(NetError, match="unsolicited inbound"):
+        r.run("unicast c7 c1")
+
+
+def test_a_reply_after_the_gateway_restarted_is_dropped():
+    net, r = internet()
+    r.run("unicast c1 c7")
+    r.run("fail g3\nrestore g3")
+    net.reconcile()
+    assert "g3" not in net.nat_table
+    with pytest.raises(NetError, match="unsolicited inbound"):
+        r.run("unicast c7 c1")
+
+
+def test_nat_shows_a_gateways_mappings():
+    net, r = internet()
+    r.run("ping c1 c7\nnat g3")
+    assert "(6,10):49152 ⇄ " in plain(r) and "with c7" in plain(r)
+
+
+def test_the_outside_has_no_route_into_a_nat_lan():
+    net, _ = internet()
+    inside = net.addr_of(("c1", 1))[0]
+    assert inside not in net.routing_table("g1")
+    assert inside in net.routing_table("g1", nat=False)
+    assert inside in net.routing_table("g3")
