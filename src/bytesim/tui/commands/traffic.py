@@ -303,6 +303,10 @@ class TrafficCommands(CommandHost):
             self.set_off_storm(fl, f"the ARP for {what} from {self._ifname(a)}")  # type: ignore[attr-defined]
             raise NetError(f"{self._ifname(a)} never got an ARP reply: its broadcast set off a storm")
         done = self._exchange(legs[:TTL], floods, self._arp_asked)
+        if net.mlag_dual:
+            crossed = {net.end(d) for _, _, p in done for d, _ in p}
+            for g in sorted(net.mlag_dual & crossed):
+                net.notes.append(f"⚠ crosses MLAG {g}, which is dual-active (peer link and keepalive down)")
         if unanswered is not None:
             net.learn_flood(floods[-1])
             raise NetError(f"nobody has {fmt(unanswered)} (ARP from {self._ifname(asker)} got no reply)")

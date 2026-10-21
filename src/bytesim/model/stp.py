@@ -64,6 +64,8 @@ class SpanningTreeMixin(NetworkBase):
         """Could this cable forward frames, storms aside? (STP blocks optional.)"""
         if not (l.up and not l.control and self.devices[l.a].up and self.devices[l.b].up):
             return False
+        if (l.a, l.pa) in self.mlag_suspended or (l.b, l.pb) in self.mlag_suspended:
+            return False                             # an MLAG secondary's suspended member port
         return not (honor_stp and ((l.a, l.pa) in self.stp_blocked or (l.b, l.pb) in self.stp_blocked))
 
     def _trunks(self, honor_stp: bool) -> list[int]:
@@ -267,7 +269,7 @@ class SpanningTreeMixin(NetworkBase):
 
     def stp_update(self) -> list[str]:
         """Re-run STP and end storms whose loop is gone. Returns notes on what changed."""
-        notes = []
+        notes = self.mlag_update()  # type: ignore[attr-defined]
         before = self.stp_blocked
         self.stp_blocked, self.stp_roots, self.stp_root_ports = self.stp_compute()
         for sw, p in sorted(before - self.stp_blocked):

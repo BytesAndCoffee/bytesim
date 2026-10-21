@@ -131,6 +131,7 @@ class NamingMixin(NetworkBase):
         self.stp_roots = {ren(d): ren(r) for d, r in self.stp_roots.items()}
         self.stp_root_ports = {ren(d): p for d, p in self.stp_root_ports.items()}
         self.storming = {ren(d) for d in self.storming}
+        self.mlag_suspended = {(ren(d), p) for d, p in self.mlag_suspended}
         self.mac_flaps = {ren(d): f for d, f in self.mac_flaps.items()}
         self.forget_macs()   # MACs are named after device ids
         self.arp_cache = {(ren(d), p): {a: ((ren(o), op), t) for a, ((o, op), t) in cache.items()}

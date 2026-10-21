@@ -719,3 +719,71 @@ def test_the_clock_and_leases_survive_a_save():
     ScriptRunner(net).run("wait 100")
     back = N.from_json(net.to_json())
     assert back.clock == 100 and back.iface("c1", 1).lease == 3600
+
+
+# ---- MLAG peer state -----------------------------------------------------------------------
+
+def mlag(keepalive=True):
+    """fab = s1+s2 (peer link s1-s2, keepalive s1:6-s2:6), dual-homed to g1 and to s3 (c1, c2)."""
+    from bytesim.scripting import replay
+    cmds = ["add g 4 1", "add s 6 3", "add c 1 2", "group fab s1 s2",
+            "g1 s1", "g1 s2", "s3 s1", "s3 s2", "c1 s3", "c2 s3", "s1 s2", "mlag fab", "lag auto"]
+    cmds += ["s1:6 s2:6 role=control"] if keepalive else []
+    net = replay("\n".join(cmds))
+    net.reconcile()
+    return net, ScriptRunner(net)
+
+
+def peer(net):
+    return next(i for i, l in enumerate(net.links) if {l.a, l.b} == {"s1", "s2"} and not l.control)
+
+
+def test_flows_use_both_chassis_while_both_are_up():
+    net, _ = mlag()
+    used = {net._logical_link("s3", 1, f"c{i}>g1") for i in range(200)}
+    assert {net.links[i].other("s3")[0] for i in used} == {"s1", "s2"}
+
+
+def test_peer_link_down_with_keepalive_up_suspends_the_secondary():
+    net, r = mlag()
+    net.links[peer(net)].up = False
+    notes = net.reconcile()
+    assert net.mlag_peer_state("fab")[0] == "peer-down"
+    assert {d for d, _ in net.mlag_suspended} == {"s2"}
+    assert any("s2 (secondary) suspends its MLAG ports" in n for n in notes)
+    path = [d for _, _, f in net.route("c1", None) for d, _ in f]
+    assert "s2" not in path and "s1" in path
+    r.run("mlags")
+    assert "peer link down" in plain(r) and "primary s1 carries the bundles" in plain(r)
+    net.links[peer(net)].up = True
+    net.reconcile()
+    assert not net.mlag_suspended
+
+
+def test_losing_peer_link_and_keepalive_is_dual_active_and_never_silent():
+    net, r = mlag()
+    for i, l in enumerate(net.links):
+        if {l.a, l.b} == {"s1", "s2"}:
+            l.up = False
+    notes = net.reconcile()
+    assert net.mlag_dual == {"fab"} and not net.mlag_suspended
+    assert any("DUAL-ACTIVE" in n for n in notes)
+    r.run("unicast c1 g1\nmlags")
+    assert "crosses MLAG fab, which is dual-active" in plain(r) and "⚠ DUAL-ACTIVE" in plain(r)
+
+
+def test_without_a_keepalive_a_peer_link_failure_is_dual_active():
+    net, _ = mlag(keepalive=False)
+    net.links[peer(net)].up = False
+    net.reconcile()
+    assert net.mlag_peer_state("fab")[0] == "dual-active"
+
+
+def test_losing_a_whole_chassis_keeps_service():
+    for victim in ("s1", "s2"):
+        net, r = mlag()
+        r.run(f"fail {victim}")
+        net.reconcile()
+        assert net.mlag_peer_state("fab")[0] == "single" and not net.mlag_suspended
+        r.run("unicast c1 g1")
+        assert "delivered to g1" in plain(r)

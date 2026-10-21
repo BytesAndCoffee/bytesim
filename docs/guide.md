@@ -760,6 +760,15 @@ Once a domain is declared:
 - **Real vPC forwarding rules:** traffic leaves on the switch it's already on
   when that switch has a member. A frame that crossed a peer link is never sent
   out a bundle, so a broadcast can't loop back to the device that sent it.
+- **Peer link and keepalive:** a control cable between two of the domain's
+  switches is their peer keepalive. The primary is the switch with the lowest
+  bridge id. If every peer link fails while the keepalive still answers, the
+  secondaries **suspend their MLAG member ports**, so the primary carries
+  every bundle alone (their other ports keep working, but can't reach the
+  primary's side through them). If the keepalive is gone too (or there never
+  was one), the domain is **dual-active**: every switch forwards as primary.
+  ByteSim warns when that happens, in `mlags`, and on every packet that
+  crosses the domain. Losing a whole switch just leaves the other one.
 - **Display:** peer links are drawn in purple and marked `⇋ peer` in the
   inspector. The domain's frame says `MLAG`.
 
@@ -1153,7 +1162,7 @@ them, and a group name on its own selects the group.
 | `tee [file\|off]` | | append console output to a text file, show status, or stop capture |
 | `broadcast <id[:port]>` | `bcast`, `flood` | flood one frame (storms in a live loop) |
 | `lag`, `lag auto`, `lag <switch\|domain> <switch\|router\|gateway\|domain>`, `unlag …`, `lags` | | find and bundle aggregatable spans |
-| `mlag <group…>`, `unmlag <group>`, `mlags` | | make a group of switches act as one (needs peer links) |
+| `mlag <group…>`, `unmlag <group>`, `mlags` | | make a group of switches act as one (needs peer links); `mlags` shows peer state |
 | `stp [on\|off]`, `stp <switch…> on\|off`, `stp priority <switch> <n>`, `stp cost <switch:port> <n>` | | spanning tree |
 | `routes [router…]`, `route <router> <network\|default> via (n,h)\|drop\|auto` | `rib` | routing tables and static routes |
 | `renumber [auto] bfs\|dfs [root]`, `renumber off` | `rename` | renumber ids in traversal order |

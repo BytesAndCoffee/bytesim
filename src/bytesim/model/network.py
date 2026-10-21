@@ -64,6 +64,7 @@ class Network(GroupsMixin, Layer2Mixin, AddressingMixin, ArpMixin, RoutingMixin,
             del self.dhcp_leases[key]
         self.dhcp_declined = {k: v for k, v in self.dhcp_declined.items() if k.split(":")[0] != dev.id}
         self.storming.discard(dev.id)
+        self.mlag_suspended = {e for e in self.mlag_suspended if e[0] != dev.id}
         self.mac_flaps.pop(dev.id, None)
         self.forget_macs({dev.id})
         self.arp_forget(dev.id)

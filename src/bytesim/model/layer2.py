@@ -264,15 +264,72 @@ class Layer2Mixin(NetworkBase):
         return member_pick(options, self.links, flow, sorted(pair))
 
     def mlag_state_key(self) -> tuple:
-        """What MLAG's peer state depends on (see mlag_suspended)."""
-        return ()
+        """What MLAG's peer state has decided (routing depends on it)."""
+        return frozenset(self.mlag_suspended), frozenset(self.mlag_dual)
+
+    def mlag_peer_state(self, g: str) -> tuple[str, str | None, bool, bool]:
+        """(state, primary, peer link up, keepalive up) for an MLAG domain. state is
+        "ok", "peer-down" (the secondaries suspend their MLAG ports), "dual-active"
+        (peer link and keepalive both down: every switch thinks it's primary), or
+        "single" (one switch left alive)."""
+        devs = self.devices_in(g)  # type: ignore[attr-defined]
+        alive = [d for d in devs if self.devices[d].up]
+        primary = min(alive, key=self.bridge_id) if alive else None  # type: ignore[attr-defined]
+        inside = [l for l in self.links if l.a in devs and l.b in devs and l.a != l.b
+                  and l.up and self.devices[l.a].up and self.devices[l.b].up]
+        peer = any(not l.control for l in inside)
+        keepalive = any(l.control for l in inside)
+        if len(alive) < 2:
+            return "single", primary, peer, keepalive
+        if peer:
+            return "ok", primary, peer, keepalive
+        return ("peer-down" if keepalive else "dual-active"), primary, peer, keepalive
+
+    def mlag_update(self) -> list[str]:
+        """Apply every domain's peer state: suspend secondaries' MLAG member ports when
+        the peer link is down but the keepalive says the primary lives. Returns notes
+        on what changed."""
+        before, dual_before = self.mlag_suspended, self.mlag_dual
+        suspended: set[tuple[str, int]] = set()
+        dual: set[str] = set()
+        notes = []
+        for g in sorted(self.mlag_domains):
+            state, primary, _, _ = self.mlag_peer_state(g)
+            if state == "dual-active":
+                dual.add(g)
+            if state != "peer-down":
+                continue
+            for l in self.links:
+                pair = self._bundle_of(l, {d: self.end(d) for d in (l.a, l.b)})
+                if pair is None or g not in pair:
+                    continue
+                for d, p in ((l.a, l.pa), (l.b, l.pb)):
+                    if self.end(d) == g and d != primary:
+                        suspended.add((d, p))
+        self.mlag_suspended, self.mlag_dual = suspended, dual
+        for g in sorted(self.mlag_domains):
+            mine = {e for e in suspended if self.end(e[0]) == g}
+            if mine and not {e for e in before if e[0] in self.devices and self.end(e[0]) == g}:
+                who = sorted({d for d, _ in mine})
+                notes.append(f"MLAG {g}: peer link down, keepalive up: {' '.join(who)} (secondary) "
+                             f"suspends its MLAG ports")
+            if g in dual and g not in dual_before:
+                notes.append(f"⚠ MLAG {g}: peer link and keepalive both down: DUAL-ACTIVE, every switch "
+                             f"forwards as primary")
+            if g in dual_before and g not in dual or (not mine and any(
+                    e[0] in self.devices and self.end(e[0]) == g for e in before)):
+                notes.append(f"MLAG {g}: peers back in touch")
+        return notes
 
     def usable(self, l: Link) -> bool:
         """Can this cable carry data? Not if it's down, a control link, an end is dead,
-        STP is blocking either end, or a broadcast storm has saturated it."""
+        STP is blocking either end, an MLAG secondary suspended it, or a broadcast
+        storm has saturated it."""
         return (l.up and not l.control and self.devices[l.a].up and self.devices[l.b].up
                 and (l.a, l.pa) not in self.stp_blocked and (l.b, l.pb) not in self.stp_blocked
-                and l.a not in self.storming and l.b not in self.storming)
+                and l.a not in self.storming and l.b not in self.storming
+                and (not self.mlag_suspended or ((l.a, l.pa) not in self.mlag_suspended
+                                                 and (l.b, l.pb) not in self.mlag_suspended)))
 
     @route_memo
     @structure_memo

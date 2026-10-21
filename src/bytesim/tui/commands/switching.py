@@ -177,6 +177,16 @@ class SwitchingCommands(CommandHost):
             bundles = sorted((next(iter(p - {g})) for p in net.lags if g in p), key=net._end_order)
             self.log_msg(f"[#af87ff]⇋ {g}[/]: {' '.join(net.devices_in(g))} · {len(peers)} peer link"
                          f"{'s' if len(peers) != 1 else ''} · bundles to {' '.join(bundles) or '—'}")
+            state, primary, peer, keepalive = net.mlag_peer_state(g)
+            keep = "keepalive " + ("up" if keepalive else "down" if any(
+                l.control and net.end(l.a) == g == net.end(l.b) for l in net.links) else "none (a control cable between them)")
+            text = {"ok": f"[green]in sync[/] · primary {primary}",
+                    "single": f"[yellow]only {primary or 'nothing'} alive[/]",
+                    "peer-down": "[yellow]peer link down[/]: secondaries suspend their MLAG ports, "
+                                 f"primary {primary} carries the bundles",
+                    "dual-active": "[b red]⚠ DUAL-ACTIVE[/]: peer link and keepalive down, every switch "
+                                   "forwards as primary"}[state]
+            self.log_msg(f"  {text} · peer link {'up' if peer else 'down'} · {keep}")
 
     def _bundle(self, a: str, b: str) -> None:
         net = self.net

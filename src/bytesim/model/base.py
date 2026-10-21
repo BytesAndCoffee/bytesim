@@ -51,6 +51,8 @@ class NetworkBase:
         self.stp_roots: dict[str, str] = {}       # switch -> its area's root bridge
         self.stp_root_ports: dict[str, int] = {}  # switch -> port toward the root
         self.storming: set[str] = set()           # switches drowning in a broadcast storm
+        self.mlag_suspended: set[tuple[str, int]] = set()   # MLAG member ports a secondary suspended
+        self.mlag_dual: set[str] = set()          # MLAG domains that lost peer link and keepalive
         self.mac_flaps: dict[str, dict[str, set[int]]] = {}  # switch -> mac -> ports it flapped between
 
     def get(self, dev_id: str) -> Device:
