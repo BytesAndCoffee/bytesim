@@ -945,3 +945,119 @@ def test_traceroute_shows_30_hops_of_a_path_longer_than_a_ping_can_go():
     r.run("traceroute c1 c2")
     text = plain(r)
     assert sum(" ms" in line for line in text.splitlines()) == 30 and "stopped at 30 hops" in text
+
+
+# ---- merged-main review: frame copies, ingress learning, partial NAT, on-link ARP ---------
+
+def test_unknown_unicast_floods_only_where_the_frame_goes():
+    """s1 knows c2 (toward s2); s2 doesn't and floods, but only away from s1. The loop
+    hanging off s1 (s3-s4-s5, no STP) never sees a copy, so nothing storms."""
+    net = build(["c", ("s", 4), ("s", 4), ("s", 4), ("s", 4), ("s", 4), "c"],
+                [("c1", "s1"), ("s1", "s2"), ("s2", "c2"), ("s1", "s3"), ("s3", "s4"), ("s4", "s5"), ("s5", "s3")])
+    r = ScriptRunner(net)
+    r.run("ip c2 (1,12)\nip c1 (1,11)\nstp off")
+    net.reconcile()
+    net.storming.clear()
+    net.arp_store(("c1", 1), (1, 12), ("c2", 1))
+    net.forget_macs()
+    net.learn_mac("s1", "C2A", 2)
+    r.run("unicast c1 c2")
+    assert "delivered to c2" in plain(r) and not net.storming
+    net.forget_macs()                                   # nobody knows it: s1 floods into the loop
+    with pytest.raises(NetError, match="unknown unicast"):
+        r.run("unicast c1 c2")
+    assert net.storming >= {"s3", "s4", "s5"}
+
+
+def test_switches_learn_a_frames_source_even_if_a_later_router_drops_it():
+    net = build(["c", "s", ("r", 2), ("r", 2), ("r", 2), "c"],
+                [("c1", "s1"), ("s1", "r1"), ("r1", "r2"), ("r2", "r3"), ("r3", "c2")])
+    r = ScriptRunner(net)
+    r.run("unicast c1 r1:1")
+    assert net.mac_seen["s1"]["C1A"] == 0
+    c2net = net.addr_of(("c2", 1))[0]
+    r.run(f"wait 30\nroute r2 {c2net} drop")
+    with pytest.raises(NetError, match="r2 drops"):
+        r.run("unicast c1 c2")
+    assert net.mac_seen["s1"]["C1A"] == 30
+
+
+def isp():
+    """c1 behind NAT g1; the internet is g1's WAN, r1 and r2; c2 is public behind r2."""
+    net = build(["c", ("g", 3), ("r", 3), ("r", 3), "c"], [("c1", "g1"), ("g1", "r1"), ("r1", "r2"), ("r2", "c2")])
+    net.group_add("public", ["r1", "r2", "c2"])
+    net.internet = "public"
+    net.reconcile()
+    return net, ScriptRunner(net)
+
+
+def test_a_nat_gateway_maps_a_flow_that_is_dropped_further_on():
+    net, r = isp()
+    c2net = net.addr_of(("c2", 1))[0]
+    r.run(f"route r1 {c2net} drop")
+    with pytest.raises(NetError, match="r1 drops"):
+        r.run("unicast c1 c2")
+    assert [m["remote"] for m in net.nat_table["g1"]] == ["c2"]
+
+
+def test_a_nat_gateway_maps_a_flow_whose_last_arp_fails():
+    net, r = isp()
+    c2net = net.addr_of(("c2", 1))[0]
+    with pytest.raises(NetError, match="ARP from r2"):
+        r.run(f"unicast c1 ({c2net},99)")
+    assert [m["remote"] for m in net.nat_table["g1"]] == [f"({c2net},99)"]
+
+
+def test_an_on_link_destination_elsewhere_is_still_asked_for_on_the_link():
+    net = build(["c", "r", "r", "c"], [("c1", "r1"), ("r1", "r2"), ("r2", "c2")])
+    r = ScriptRunner(net)
+    r.run("ip c1 (1,10) 1\nip c2 (1,20)")
+    floods = counting_floods(net)
+    with pytest.raises(NetError, match="nothing on c1:nic1's link has it"):
+        r.run("unicast c1 (1,20)")
+    assert floods == [("c1", 1)]
+
+
+def test_nat_keeps_protocols_apart():
+    net, r = internet()
+    r.run("ping c1 c7")                                     # an ICMP echo mapping…
+    with pytest.raises(NetError, match="unsolicited inbound"):
+        r.run("unicast c7 c1")                              # …doesn't let UDP back in
+    r.run("unicast c1 c7\nunicast c7 c1")
+    assert "delivered to c1" in plain(r)
+    assert {m["proto"] for m in net.nat_table["g3"]} == {"icmp", "udp"}
+
+
+def test_switches_without_stp_hear_no_topology_change():
+    net = build([("s", 4)] * 3 + ["c", "c"], [("s1", "s2"), ("s2", "s3"), ("s3", "s1"), ("s1", "c1"), ("s3", "c2")])
+    r = ScriptRunner(net)
+    r.run("unicast c1 c2")
+    tables = {k: dict(v) for k, v in net.mac_tables.items()}
+    r.run("stp off")
+    net.reconcile()                                         # no STP left to send a TCN
+    assert net.mac_tables == tables
+
+
+def test_an_on_link_miss_asks_from_the_router_its_own_route_reached():
+    """c2 has two interfaces off their links: one on r1's network, one on r2's. The send
+    the error comes from is the one traced and asked for: no ARP from a router it skipped."""
+    net = build(["c", ("r", 3), ("r", 3), "s", ("c", 2)], [("c1", "r1"), ("r1", "r2"), ("r2", "s1")])
+    r = ScriptRunner(net)
+    n1, n2 = net.addr_of(("r1", 2))[0], net.addr_of(("r2", 2))[0]
+    r.run(f"ip c2:1 ({n1},50)\nip c2:2 ({n2},50)")
+    floods = counting_floods(net)
+    with pytest.raises(NetError, match="ARP got no reply"):
+        r.run("unicast c1 c2")
+    assert [d for d, _ in floods] == ["c1", "r1", "r2"]     # each router asks only once it has it
+
+
+def test_ttl_runs_out_before_the_last_routers_arp():
+    net = build(["c"] + ["r"] * 64 + ["s", "c"], [("c1", "r1")] + [(f"r{i}", f"r{i + 1}") for i in range(1, 64)]
+                + [("r64", "s1")])
+    r = ScriptRunner(net)
+    last = net.addr_of(("r64", 2))[0]
+    r.run(f"ip c2 ({last},50)")
+    floods = counting_floods(net)
+    with pytest.raises(NetError, match="TTL expired at r64"):
+        r.run("unicast c1 c2")
+    assert ("r64", 2) not in floods

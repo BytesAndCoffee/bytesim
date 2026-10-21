@@ -71,6 +71,16 @@ def route_memo(fn):
 class Layer2Mixin(NetworkBase):
     flooded: list[str] = []          # set by forward(): switches that flooded the last frame
 
+    def known_link(self, switch: str, mac: str) -> int | None:
+        """The cable a switch's table sends mac out of, or None if it would flood: no
+        entry, one on a cable that can't carry data (forgotten), or, on an MLAG switch,
+        one over its peer link (the domain's shared table decides)."""
+        entry = self.mac_tables.get(switch, {}).get(mac)
+        out = self.link_index(switch, entry) if entry is not None else None
+        if out is None or not self.usable(self.links[out]) or self.is_peer_link(self.links[out]):
+            return None
+        return out
+
     @contextmanager
     def remembering(self):
         """A scope in which the structure is remembered (nothing may change it meanwhile)."""
@@ -461,10 +471,8 @@ class Layer2Mixin(NetworkBase):
             if (v, li) in seen:
                 return None, f"the frame for {mac} loops through {v} (stale MAC tables)"
             seen.add((v, li))
+            out = self.known_link(v, mac)
             entry = self.mac_tables.get(v, {}).get(mac)
-            out = self.link_index(v, entry) if entry is not None else None
-            if out is not None and (not self.usable(self.links[out]) or self.is_peer_link(self.links[out])):
-                out = None
             if out is not None:
                 came = self.bundle(self.links[li])
                 if out == li or (came is not None and came == self.bundle(self.links[out])):
