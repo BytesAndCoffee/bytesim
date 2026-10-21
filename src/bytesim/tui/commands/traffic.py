@@ -289,7 +289,13 @@ class TrafficCommands(CommandHost):
                                 hint = self.storm_hint(src, *(c[0] for c in cands or []))  # type: ignore[attr-defined]
                                 raise NetError(f"{e}{hint}") from None
                         else:
-                            if not reply:
+                            # A route in (a static one, say) doesn't get past NAT: crossing
+                            # from WAN to LAN still takes a mapping.
+                            if (blocked := net.nat_block(legs)) is not None:
+                                legs = self._nat_return(src, cands, remote or src) if reply or stream else None
+                                if legs is None:
+                                    raise NetError(blocked)
+                            elif not reply:
                                 net.notes.extend(net.nat_open(legs, cands[0][0] if cands else "internet",
                                                               net.ephemeral()))
                 if self._carried:

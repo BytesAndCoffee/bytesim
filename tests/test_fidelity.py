@@ -826,3 +826,45 @@ def test_a_new_echo_request_never_rides_a_mapping_in():
     r.run("ping c1 c7")
     with pytest.raises(NetError, match="dropped by g3's NAT: unsolicited inbound"):
         r.run("ping c7 c1")
+
+
+# ---- review follow-ups ---------------------------------------------------------------------
+
+def test_reordering_an_active_passive_cluster_rebuilds_the_tables():
+    net = build(["c", ("r", 4), ("r", 4), ("r", 4), "c"], [("c1", "r3"), ("r3", "r1"), ("r1", "c2")])
+    r = ScriptRunner(net)
+    r.run("r1:4 r2:4 role=control\ncluster ha r1 r2 mode=active-passive")
+    net.reconcile()
+    assert [leg[1][0] for leg in net.route("c1", ("c2", 1))] == ["r3", "r1", "c2"]   # warms the tables
+    net.groups["ha"].reverse()                                                    # r2 is active now
+    assert net.standby_routers() == {"r1"}
+    with pytest.raises(NetError):
+        net.route("c1", ("c2", 1))
+
+
+def test_a_static_route_into_a_nat_lan_still_needs_a_mapping():
+    net = build(["c", "g", "g", "c"], [("c1", "g1"), ("g1", "g2"), ("g2", "c2")])
+    r = ScriptRunner(net)
+    r.run("group isp g2 c2\ninternet isp")
+    net.reconcile()
+    wan = net.addr_of(next((("g1", p) for p in net.wan_ports("g1"))))
+    lan = net.addr_of(("c1", 1))[0]
+    r.run(f"route g2 {lan} via ({wan[0]},{wan[1]})")
+    assert net.route("c2", ("c1", 1))                          # the route exists...
+    with pytest.raises(NetError, match="dropped by g1's NAT: unsolicited inbound"):
+        r.run("unicast c2 c1")                                  # ...but NAT still says no
+    r.run("unicast c1 c2\nunicast c2 c1")                       # return traffic on c1's flow
+    assert "delivered to c1" in plain(r)
+    with pytest.raises(NetError, match="unsolicited inbound"):
+        r.run("ping c2 c1")                                     # a new echo request isn't a reply
+
+
+def test_a_connected_network_beats_a_static_route():
+    net = build(["c", "r", "c"], [("c1", "r1"), ("r1", "c2")])
+    r = ScriptRunner(net)
+    c2net = net.addr_of(("c2", 1))[0]
+    r.run(f"route r1 {c2net} drop")
+    assert "connected to r1: the connected route wins" in plain(r)
+    assert net.routing_table("r1")[c2net].kind == "connected"
+    r.run("ping c1 c2")
+    assert "  reply from c2" in plain(r)

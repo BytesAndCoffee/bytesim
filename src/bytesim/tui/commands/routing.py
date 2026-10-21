@@ -78,6 +78,10 @@ class RoutingCommands(CommandHost):
             self.log_msg(f"{r}: drops traffic for {where} (static)")
         else:
             self.log_msg(f"{r}: {where} via {fmt(target)} (static)")
+        if target is not None and key in {i.net for _, i in net.addressed(r)}:
+            self.log_msg(f"  [yellow]network {key} is connected to {r}: the connected route wins, so this "
+                         f"static route isn't installed[/]")
+        elif target not in (None, "drop"):
             if net._static_hop(r, target) is None:
                 self.log_msg(f"  [yellow]{fmt(target)} isn't on a live network of {r}: the route stays "
                              f"uninstalled until it is[/]")

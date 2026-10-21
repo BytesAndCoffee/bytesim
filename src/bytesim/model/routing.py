@@ -169,6 +169,8 @@ class RoutingMixin(NetworkBase):
                 tuple((k, i.net, i.host) for k, i in self.ifaces.items()),
                 frozenset(self.stp_blocked), frozenset(self.storming),
                 tuple(sorted(self.clusters.items())), tuple(sorted(self.cluster_modes.items())),
+                tuple((c, tuple(self.devices_in(c))) for c in sorted(self.clusters)),  # type: ignore[attr-defined]
+                #   member order elects the active-passive forwarder
                 frozenset(self.lags), frozenset(self.mlag_domains), self.mlag_state_key(),  # type: ignore[attr-defined]
                 repr(sorted(self.static_routes.items())), self.internet,
                 tuple(self.devices_in(self.internet)) if self.internet in self.groups else (),  # type: ignore[attr-defined]
@@ -268,6 +270,8 @@ class RoutingMixin(NetworkBase):
             hops = set().union(*(first[v] for v in exits if dist[v] == best))
             table[DEFAULT] = Route("default", best, sorted(hops))
         for net, target in self.static_routes.get(u, {}).items():
+            if net in table and table[net].kind == "connected":
+                continue                                 # a connected network beats a static route
             if target == "drop":
                 table[net] = Route("drop")
                 continue

@@ -413,7 +413,9 @@ for static. Press `v` to hide or show them.
   route: `route r1 5 via (2,2)` sends network 5 to that next hop, `route r1 5
   drop` discards it, `route r1 5 auto` goes back to the learned route. A
   static route whose next hop isn't on one of the router's live networks
-  isn't installed. Two routers pointing at each other make a loop, which runs
+  isn't installed, and neither is one for a network the router is connected
+  to (the connected route wins). A static route into a NAT gateway's LAN
+  still meets its NAT: without a mapping, traffic is dropped. Two routers pointing at each other make a loop, which runs
   until the TTL expires. `routes r1` shows a table.
 - Only gateways reach `internet`.
 - **Equal-cost paths (ECMP):** when several next hops are equally cheap, each
