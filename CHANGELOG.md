@@ -28,6 +28,56 @@
   the tunnel) and in graph mode.
 - `demo overlay`; all of it is kept by saves, undo, export scripts and YAML topologies.
 
+### Forwarding fidelity
+Every mechanism now gets its result for the reason a real network would.
+
+- **Echo replies** are routed by the receiver instead of retracing the request:
+  a receiver with no way back gives `✗ no reply`. The TTL shown is the reply's.
+  A receiver that fails while the request is on its way never answers.
+- **TTLs** are enforced: the 64th router drops the packet (time exceeded).
+  `traceroute` sends probes with rising TTLs; each router answers on its own,
+  `*` when its answer can't get back.
+- **Switching** follows MAC tables: every hop's ARP request teaches the switches
+  it floods, the reply teaches its path, and frames follow the entries,
+  flooding unknown destinations (into a loop: a storm). Entries age out after
+  five minutes, a port forgets what it learned when its link goes down, an STP
+  change flushes its area, and a computer whose link comes up or moves sends a
+  gratuitous ARP. `Network.forward()` follows the tables as they are.
+- **ARP caches** per interface (60 s): a cached hop sends no ARP; a stale entry
+  loses one packet and is dropped. A host asks for its configured gateway
+  address, so caches follow a virtual gateway's failover. `arp [<id>] [clear]`.
+  ARP for an address nobody has is sent, and can storm, before it fails.
+- **A simulated clock**: `wait <seconds>` (or `90s`, `5m`, `2h`); the app keeps
+  it in step with the wall clock while not paused. It's saved with the network.
+- **Routing tables**: each router forwards by its own table (connected, learned
+  by link-state shortest paths, static, default), one lookup per router, with
+  rendezvous ECMP. `routes [<router>]`; `route <router> <net|default> via
+  (n,h) | drop | auto` sets static routes (saved, exported, in YAML). A
+  destination on a sender's own network is reached by ARP or not at all.
+- **Stateful NAT**: per-flow mappings with public ports (per remote on hard
+  NAT) that expire 60 s after their last packet and vanish when the gateway
+  fails; replies and return traffic are translated back through them, and a
+  NAT gateway no longer advertises its LAN, so nothing outside routes in.
+  `nat <gateway>` lists mappings.
+- **DHCP leases**: servers keep bindings, clients ARP-probe offers and decline
+  addresses in use, pools can run out, leases last an hour, renew at half-time
+  and expire (falling back to ad-hoc) when the server is gone. `ip` shows time
+  left; `release` frees the server's binding.
+- **STP port costs** (default 20000): `stp cost <switch:port> <n>`; root ports
+  and blocking follow root path cost (saved, exported, in YAML as `costs:`).
+- **LAG member choice** by rendezvous hashing: a member failure moves only the
+  flows it carried.
+- **MLAG peer state**: a control cable between a domain's switches is its peer
+  keepalive. Peer link down with the keepalive up suspends the secondaries'
+  MLAG ports; both down is dual-active, reported loudly. `mlags` shows it.
+- **HA**: an active-passive standby no longer forwards for hosts that use its
+  own address as their gateway.
+- **Source interfaces** (`ping c1:2 c3`) bind the packet to that NIC instead of
+  being ignored.
+- Packets act only as far as they get: each hop's ARP, and each router's NAT
+  mapping, refresh or drop, happens once the packet reaches it, so a frame
+  lost early opens no mapping and sets off no storm beyond it.
+
 ## 0.3.2 (2026-10-20)
 
 - `demo mlag` (`bytesim --demo mlag`): a seven-tier data centre (edge gateway,

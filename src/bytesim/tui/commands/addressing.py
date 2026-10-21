@@ -4,6 +4,7 @@ from __future__ import annotations
 from rich.markup import escape
 
 
+from ...constants import LEASE_TIME
 from ...model import Device, Iface, NetError, fmt
 from ..inspector import mode_text
 from .base import CommandHost
@@ -29,6 +30,7 @@ class AddressCommands(CommandHost):
             ifc = self.net.iface(*nic)
             if ifc.addr:
                 self.log_msg(f"[#ffd700]DHCP[/] {self._ifname(nic)} RELEASE {fmt(ifc.addr)}")
+            self.net.dhcp_release(nic)
             ifc.mode = "none"
             ifc.clear()
         self.changed()
@@ -46,6 +48,31 @@ class AddressCommands(CommandHost):
             self.log_msg(f"{self._ifname(nic)} → {fmt(ifc.addr)} [yellow](ad-hoc: free host "
                          f"on network {ifc.net}, no server)[/]")
         self.changed()
+
+    @command("arp")
+    def cmd_arp(self, args: list[str], opts: dict[str, str]) -> None:
+        """Show or clear ARP caches: arp · arp c1 · arp c1 clear · arp clear."""
+        net = self.net
+        words = [a.lower() for a in args]
+        clear = bool(words) and words[-1] == "clear"
+        if clear:
+            words = words[:-1]
+        if len(words) > 1:
+            raise NetError("usage: arp [<id>] [clear]")
+        dev = net.get(self._ref(words[0])[0]).id if words else None
+        if clear:
+            net.arp_forget(dev)
+            self.log_msg(f"ARP cache{'s' if dev is None else ''} cleared" + (f" on {dev}" if dev else ""))
+            return
+        rows = [(ifc, addr, owner, until) for ifc, cache in sorted(net.arp_cache.items())
+                if dev in (None, ifc[0]) for addr, (owner, until) in sorted(cache.items())]
+        if not rows:
+            self.log_msg(f"[dim]no ARP entries{' on ' + dev if dev else ''}[/]")
+            return
+        self.log_msg("[b]INTERFACE  ADDRESS   MAC     EXPIRES[/]")
+        for ifc, addr, owner, until in rows:
+            mac = net.devices[owner[0]].mac(owner[1]) if owner[0] in net.devices else "?"
+            self.log_msg(f"{self._ifname(ifc):10} {fmt(addr):9} {mac:7} in {until - net.clock:.0f}s")
 
     @command("dhcpd")
     def cmd_dhcpd(self, args: list[str], opts: dict[str, str]) -> None:
@@ -128,6 +155,7 @@ class AddressCommands(CommandHost):
             self.log_msg("  [red]DHCP failed: the DISCOVER drowned in the storm it caused[/]")
             return
         kind, server = net.lease(nic)
+        declined = list(net.dhcp_notes)
         net.learn_flood(fl)
         reached = len(fl.delivered)
         self.log_msg(f"[b #ffd700]DHCP[/] {name} [dim]{mac}[/] DISCOVER → broadcast "
@@ -141,9 +169,12 @@ class AddressCommands(CommandHost):
                 self.log_msg(f"  [yellow]no DHCP server answered: took free address "
                              f"{fmt(ifc.addr)} on network {ifc.net} (ad-hoc)[/]")
             else:
-                verb = "ACK (renewed)" if kind == "renew" else "OFFER → REQUEST → ACK"
+                for note in declined:
+                    self.log_msg(f"  [yellow]{escape(note)}[/]")
+                verb = "REQUEST → ACK (renewed)" if kind == "renew" else "OFFER → REQUEST → ACK"
                 self.log_msg(f"  [#ffd700]{verb}[/] from {server[0]} {fmt(net.addr_of(server))}: "
-                             f"network {ifc.net} → host {ifc.host}, gateway {ifc.gw}")
+                             f"network {ifc.net} → host {ifc.host}, gateway {ifc.gw}, "
+                             f"lease {LEASE_TIME / 60:.0f} min")
             self.refresh_sidebar()
             c.refresh()
 
@@ -233,5 +264,7 @@ class AddressCommands(CommandHost):
         host = str(ifc.host) if ifc.addr else "—"
         gw = str(ifc.gw) if ifc.gw is not None else ""
         state = "" if cabled else " [dim](no cable)[/]"
+        if ifc.via == "dhcp" and ifc.lease is not None and ifc.addr:
+            state += f" [dim](lease {max(0.0, ifc.lease - self.net.clock) / 60:.0f} min left)[/]"
         self.log_msg(f"[{d.color}]{d.id + ':' + d.port_name(p):<9}[/] {d.mac(p):<7} {net:>3}  {host:>4}  "
                      f"{mode_text(ifc):<10} {gw}{state}")

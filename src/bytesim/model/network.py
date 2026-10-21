@@ -6,6 +6,7 @@ from dataclasses import asdict
 
 from ..constants import KINDS, MAX_PORTS
 from .addressing import AddressingMixin
+from .arp import ArpMixin
 from .cloning import CloningMixin
 from .groups import GroupsMixin
 from .ha import HAMixin
@@ -19,7 +20,7 @@ from .overlay import OverlayMixin
 from .wan import WanMixin
 
 
-class Network(GroupsMixin, Layer2Mixin, AddressingMixin, RoutingMixin, HAMixin, LayoutMixin,
+class Network(GroupsMixin, Layer2Mixin, AddressingMixin, ArpMixin, RoutingMixin, HAMixin, LayoutMixin,
               NamingMixin, SpanningTreeMixin, CloningMixin, WanMixin, OverlayMixin):
     """A simulated network: devices, cables, groups, addresses and HA clusters.
 
@@ -38,6 +39,7 @@ class Network(GroupsMixin, Layer2Mixin, AddressingMixin, RoutingMixin, HAMixin, 
     def remove(self, dev_id: str) -> int:
         dev = self.get(dev_id)
         before = len(self.links)
+        self.flush_ports({e for l in self.links if l.touches(dev.id) for e in ((l.a, l.pa), (l.b, l.pb))})
         self.links = [l for l in self.links if not l.touches(dev.id)]
         del self.devices[dev.id]
         self._drop_from_groups([dev.id])
@@ -56,9 +58,17 @@ class Network(GroupsMixin, Layer2Mixin, AddressingMixin, RoutingMixin, HAMixin, 
         self.lags = {p for p in self.lags if dev.id not in p}
         self.stp_off.discard(dev.id)
         self.stp_priority.pop(dev.id, None)
+        self.stp_cost = {k: v for k, v in self.stp_cost.items() if k[0] != dev.id}
+        self.static_routes.pop(dev.id, None)
+        for key in [k for k in self.dhcp_leases if k.split(":")[0] == dev.id]:   # a client's binding outlives it
+            del self.dhcp_leases[key]
+        self.dhcp_declined = {k: v for k, v in self.dhcp_declined.items() if k.split(":")[0] != dev.id}
         self.storming.discard(dev.id)
+        self.mlag_suspended = {e for e in self.mlag_suspended if e[0] != dev.id}
         self.mac_flaps.pop(dev.id, None)
-        self.mac_tables = {}
+        self.forget_macs({dev.id})
+        self.arp_forget(dev.id)
+        self.nat_forget(dev.id)
         return before - len(self.links)
 
     def resize(self, dev_id: str, nports: int) -> None:
@@ -71,6 +81,7 @@ class Network(GroupsMixin, Layer2Mixin, AddressingMixin, RoutingMixin, HAMixin, 
         dev.nports = nports
         for p in range(nports + 1, MAX_PORTS + 1):
             self.ifaces.pop(f"{dev.id}:{p}", None)
+            self.stp_cost.pop((dev.id, p), None)
 
     def connect(self, a: str, pa: int | None, b: str, pb: int | None, role: str = "data") -> Link:
         da, db = self.get(a), self.get(b)
@@ -104,11 +115,19 @@ class Network(GroupsMixin, Layer2Mixin, AddressingMixin, RoutingMixin, HAMixin, 
             return db is None or l.other(da.id)[0] == db.id
 
         before = len(self.links)
+        gone = [l for l in self.links if match(l)]
         self.links = [l for l in self.links if not match(l)]
-        if len(self.links) != before:
-            self.mac_tables = {}      # topology changed: switches forget what they learned
+        self.flush_ports({e for l in gone for e in ((l.a, l.pa), (l.b, l.pb))})   # link down at both ends
         return before - len(self.links)
 
+
+    def advance(self, seconds: float) -> list[str]:
+        """Let simulated time pass. Returns notes on what expired along the way."""
+        self.clock += seconds
+        self.age_macs()
+        self.age_arp()
+        self.age_nat()
+        return self.age_leases()
 
     # ---- persistence ---------------------------------------------------
     def to_json(self) -> str:
@@ -128,11 +147,16 @@ class Network(GroupsMixin, Layer2Mixin, AddressingMixin, RoutingMixin, HAMixin, 
             "mlag_domains": sorted(self.mlag_domains),
             "stp_off": sorted(self.stp_off, key=lambda d: (d[0], int(d[1:]))),
             "stp_priority": self.stp_priority,
+            "stp_cost": {f"{s}:{p}": c for (s, p), c in sorted(self.stp_cost.items())},
+            "static_routes": {r: {("default" if n == 0 else str(n)): (t if t == "drop" else list(t))
+                                  for n, t in sorted(routes.items())}
+                              for r, routes in sorted(self.static_routes.items())},
             "internet": self.internet,
             "nat_off": sorted(self.nat_off, key=lambda d: int(d[1:])),
             "nat_hard": sorted(self.nat_hard, key=lambda d: int(d[1:])),
             "overlays": self.overlay_state(),
             "relays": self.relays,
+            "clock": self.clock,
         }, indent=2)
 
     @classmethod
@@ -171,9 +195,21 @@ class Network(GroupsMixin, Layer2Mixin, AddressingMixin, RoutingMixin, HAMixin, 
                     if len(set(p)) == 2 and set(p) <= set(net.devices) | net.mlag_domains}
         net.stp_off = set(data.get("stp_off", [])) & set(net.devices)
         net.stp_priority = {d: int(v) for d, v in data.get("stp_priority", {}).items() if d in net.devices}
+        for r, routes in data.get("static_routes", {}).items():
+            if r not in net.devices or net.devices[r].kind not in "rg":
+                continue
+            for n, t in routes.items():
+                key = 0 if n == "default" else int(n) if str(n).isdigit() else None
+                if key is not None and (t == "drop" or (isinstance(t, list) and len(t) == 2)):
+                    net.static_routes.setdefault(r, {})[key] = t if t == "drop" else (int(t[0]), int(t[1]))
+        for key, c in data.get("stp_cost", {}).items():
+            s, _, p = key.partition(":")
+            if s in net.devices and net.devices[s].kind == "s" and p.isdigit() and 1 <= int(p) <= net.devices[s].nports:
+                net.stp_cost[s, int(p)] = int(c)
         net.internet = data.get("internet") if data.get("internet") in net.groups else None
         net.nat_off = {d for d in data.get("nat_off", []) if d in net.devices and net.devices[d].kind == "g"}
         net.nat_hard = {d for d in data.get("nat_hard", []) if d in net.devices and net.devices[d].kind == "g"}
         net.load_overlays(data.get("overlays", {}))
         net.relays = [d for d in data.get("relays", []) if d in net.devices]
+        net.clock = float(data.get("clock", 0.0))
         return net

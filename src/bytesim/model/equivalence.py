@@ -4,7 +4,8 @@ Two networks are *equivalent* when they agree on everything ByteSim promises a
 construction script rebuilds: device ids, kinds and port counts; id counters
 (so the next new device gets the same id); groups, their nesting and member
 order; every cable's endpoints, ports and role; HA clusters; STP, DHCP-server
-and interface settings; and which devices and cables are failed.
+and interface settings (STP port costs among them); static routes; and which
+devices and cables are failed.
 
 Deliberately ignored: positions and display layout settings, learned addresses
 (re-learned by DHCP and router autoconfiguration), MAC tables, STP's blocked
@@ -53,6 +54,8 @@ def canonical(net: Network) -> dict[str, Any]:
         "cluster_modes": dict(net.cluster_modes),
         "stp_off": frozenset(net.stp_off),
         "stp_priority": dict(net.stp_priority),
+        "stp_cost": dict(net.stp_cost),
+        "static_routes": {r: dict(routes) for r, routes in net.static_routes.items()},
         "dhcp_off": frozenset(net.dhcp_off),
         "lags": frozenset(net.lags),
         "mlag_domains": frozenset(net.mlag_domains),

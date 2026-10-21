@@ -361,13 +361,25 @@ port; the (network, host) pair is its logical address.
 - **Computers use DHCP** by default. Cabling a computer starts an exchange you
   can watch: a yellow DISCOVER spreads to every interface on the segment, then
   a green OFFER/ACK comes back from a router. Leases start at host 10, and the
-  gateway is the router's host number.
+  gateway is the router's host number. A router serves only the networks it's
+  on (there are no DHCP relays), so a segment without one gets no lease.
+- **The server keeps bindings**: it offers a client the address it already
+  holds for it, else the lowest free one in its pool (hosts 10–253). Before
+  taking an offer the client ARP-probes it; if something on its link already
+  has the address (a static host, say), it declines (`DECLINE (1,10)`) and the
+  server offers the next. A full pool leaves the client without a lease.
+- **Leases last an hour** of simulated time (`wait`). A client renews at
+  half-time and keeps its address; if its server doesn't answer, the lease
+  runs out, is released and the client goes ad-hoc. `ip` shows what's left.
 - **Ad-hoc:** if no DHCP server answers, the computer takes an unused host on
   its local network, or opens a new network if it's the first one there. A
   pair of computers cabled directly works this way. When a router appears
   later, ad-hoc hosts switch to DHCP and keep their host number.
-- Unplugging a computer releases its address. If a DHCP server is switched off
-  or becomes unreachable, clients keep their existing leases.
+- Unplugging a computer releases its address on the computer, but its server
+  keeps the binding until the lease would have run out, so plugging it back
+  in gets the same address. `release` tells the server (a RELEASE). If a
+  server is switched off or becomes unreachable, clients keep their leases
+  until they expire.
 
 ```text
 ip                         table of every interface: MAC, network, host, mode, gateway
@@ -385,28 +397,73 @@ for static. Press `v` to hide or show them.
 
 ### Routing
 
-- A computer delivers directly to anything on its own network. Anything else
-  goes to its gateway.
-- Routers forward between networks, choosing the path with the fewest cable
-  hops. Two routers are neighbours when they share a network.
+- A computer delivers directly to anything on its own network (by ARP: if
+  nothing on its link answers, the send fails rather than going to the
+  gateway). Anything else goes to its gateway.
+- **Every router has a routing table**: its connected networks, the networks
+  it learned, its static routes, and a default route toward the gateways that
+  lead to the internet. A packet crosses one router at a time, and each looks
+  up the destination's network in its own table (or uses its default route).
+  No route means no delivery, however the cables run.
+- Tables come from a link-state protocol: two routers are neighbours when they
+  share a network, a cable costs one, and each router runs shortest paths
+  from itself. It converges instantly: when the topology changes, the tables
+  are rebuilt before the next packet.
+- **Static routes** override what's learned, for one network or the default
+  route: `route r1 5 via (2,2)` sends network 5 to that next hop, `route r1 5
+  drop` discards it, `route r1 5 auto` goes back to the learned route. A
+  static route whose next hop isn't on one of the router's live networks
+  isn't installed, and neither is one for a network the router is connected
+  to (the connected route wins). A static route into a NAT gateway's LAN
+  still meets its NAT: without a mapping, traffic is dropped. Two routers pointing at each other make a loop, which runs
+  until the TTL expires. `routes r1` shows a table.
 - Only gateways reach `internet`.
-- **Equal-cost paths (ECMP):** when several paths are equally short, the
+- **Equal-cost paths (ECMP):** when several next hops are equally cheap, each
   router picks one by hashing the flow, meaning its source and destination.
   One conversation always takes the same path (so its packets stay in order),
-  while different conversations spread across all the equal paths. In an
-  active-active cluster, both routers share the load. The choice is stable
-  from run to run, so seeded traffic stays reproducible.
+  while different conversations spread across all the equal paths, and losing
+  a next hop moves only the flows that used it. In an active-active cluster,
+  both routers share the load. The choice is stable from run to run, so
+  seeded traffic stays reproducible.
+- Every router takes one off a packet's TTL, which starts at 64. The 64th
+  router on the way drops it (time exceeded), so at most 63 routers can lie
+  between two hosts.
 - When something can't be reached, ByteSim says why: no address, no gateway,
   no route, or a gateway that isn't reachable.
 
-Switches learn MAC addresses from the traffic that crosses them. Select a
-switch to see its MAC table. Removing a cable or a device clears all the
-tables.
+Every hop starts with ARP (unless the sender's cache already has the answer,
+below), and switches forward by what that teaches them:
+
+1. The ARP request floods the sender's broadcast domain, and every switch it
+   crosses learns the sender's MAC on the port it came in by.
+2. The reply travels back by those entries, and the switches on its way learn
+   the answering interface's MAC.
+3. The frame follows the switches' entries. A switch that doesn't know the
+   destination floods it; an entry for a cable that can't carry data counts
+   as forgotten. A wrong entry misdelivers or drops the frame, unless an ARP
+   reply has just corrected it.
+
+ARP for an address nobody has is still sent: the host asks on its own network,
+or the router on that network asks, and the broadcast floods (and can set off a
+storm) before the send fails with no reply. Select a switch to see its MAC
+table. Entries age out after five minutes without traffic from that MAC, a
+port whose link goes down forgets what it learned, and a computer whose link
+comes up (or moves) announces itself with a gratuitous ARP.
+
+Interfaces **cache ARP answers** for a minute (`arp c1` shows a cache, `arp
+c1 clear` empties it). A hop whose answer is cached sends no ARP: the frame
+goes straight to the cached MAC, and a switch that has forgotten that MAC
+floods it. If the address has moved meanwhile, that packet is lost and the
+entry dropped, so the next one asks again. Both ends of an exchange learn: the
+target caches the asker too. A failed device comes back with empty caches.
 
 ## Sending traffic
 
 ```text
 ping c1 c8                 echo request (red) and reply (green)
+ping c1:2 c8               send from c1's second NIC (computers only)
+traceroute c1 c8           TTL 1, 2, 3…: every router on the way, then c8
+wait 90                    let 90 simulated seconds pass (caches, mappings, leases age)
 ping c4 (1,1)              destinations can be addresses
 ping c1 internet           via the nearest gateway
 mping c1 c4 c6 c8          multicast request (magenta), individual replies (green)
@@ -422,6 +479,23 @@ unicast c2 c7              one-way packet (orange)
 mcast c1 c4 c6 c8          one packet, copied where the paths split (magenta)
 mcast c1 pcs all           receivers can be group names or `all` (every computer)
 ```
+
+An echo reply is a packet of its own: the receiver routes it back to the
+interface that asked, so a ping fails with `no reply` when the receiver has no
+way back (no gateway, say), even though the request arrived. Replies through an
+overlay retrace the request's tunnel. The reported TTL is the reply's. A
+receiver that fails (or is deleted) while the request is on its way never
+answers.
+
+`traceroute` sends probes with TTL 1, 2, 3… (up to 30), each forwarded on its
+own: the router where one runs out answers `time exceeded` from the address the
+probe came in on, and that answer is routed back on its own, so a router with
+no way back shows `*`. A router that can't forward the probes (no route, a
+drop route, a NAT) ends the list with `*`, after the hops before it.
+
+Packets act on the network only as far as they get. A frame lost on its first
+hop never reaches the router, so that router opens no NAT mapping and sends no
+ARP of its own.
 
 Detailed sends log the address path, an ARP line for every hop (`ARP (3,1) is-at
 R1C`) and the TTL. Multicast also reports where copies were made and how many
@@ -535,7 +609,7 @@ subsequent output immediately, including preparation and replies already in flig
 queued actions use the settings active when resumed. The inspector displays both
 settings. They persist across network loads, clears and undo/redo, independently
 of saved networks. Tracing also applies to ordinary ping, unicast and one-way
-multicast. `traceroute` and `tracert` remain ping aliases; `trace` controls output.
+multicast. `trace` controls output (it isn't `traceroute`, below).
 
 Startup flags set the same preferences:
 
@@ -616,8 +690,12 @@ frames have no TTL. That is a **broadcast storm**.
 
 **Switches run spanning tree (STP) by default.** In each area of cabled-
 together switches, STP elects a **root bridge** (the lowest bridge id:
-priority, then switch number). It keeps one shortest path from every switch to
-the root and **blocks** one end of every other switch-to-switch cable. Blocked
+priority, then switch number). Every port has a **path cost** (20000 by
+default, as for a 1 Gb/s port), and a switch's root path cost is the sum of
+the costs of the ports a frame from the root enters by. Each switch's **root
+port** is its cheapest way to the root (ties go to the lower bridge id, then
+port), and STP **blocks** one end of every other switch-to-switch cable: the
+end farther from the root. Blocked
 cables are drawn dashed, and the blocked port shows `⊘`. Switches with STP off
 can't block anything, but they pass STP frames straight through, so a single
 STP switch can still break a loop of plain switches. A loop made *only* of
@@ -628,11 +706,16 @@ stp                          every switched area: root bridge, blocked ports, li
 stp off  |  stp on           for every switch
 stp s4 s5 off                for some switches
 stp priority s7 4096         lower priority wins the root election (default 32768)
+stp cost s7:3 2000           a cheaper port is preferred toward the root (default 20000)
 broadcast c1                 flood one frame from c1 (or c1:2, r1:p6…)
 ```
 
-**What sets off a storm:** a `broadcast`, a DHCP DISCOVER, or the ARP request
-that starts every ping, unicast or multicast hop, sent into a live loop. The
+When the tree changes (a cable fails, a priority or cost changes), the switches
+in that area flush their MAC tables, as a topology-change notice makes them.
+
+**What sets off a storm:** a `broadcast`, a DHCP DISCOVER, a gratuitous ARP
+from a computer whose link comes up, an ARP request, or a frame for a MAC no
+switch knows (flooded), sent into a live loop. The
 console shows:
 
 - the number of frames in flight at each hop. A plain ring just circles; a
@@ -703,6 +786,15 @@ Once a domain is declared:
 - **Real vPC forwarding rules:** traffic leaves on the switch it's already on
   when that switch has a member. A frame that crossed a peer link is never sent
   out a bundle, so a broadcast can't loop back to the device that sent it.
+- **Peer link and keepalive:** a control cable between two of the domain's
+  switches is their peer keepalive. The primary is the switch with the lowest
+  bridge id. If every peer link fails while the keepalive still answers, the
+  secondaries **suspend their MLAG member ports**, so the primary carries
+  every bundle alone (their other ports keep working, but can't reach the
+  primary's side through them). If the keepalive is gone too (or there never
+  was one), the domain is **dual-active**: every switch forwards as primary.
+  ByteSim warns when that happens, in `mlags`, and on every packet that
+  crosses the domain. Losing a whole switch just leaves the other one.
 - **Display:** peer links are drawn in purple and marked `⇋ peer` in the
   inspector. The domain's frame says `MLAG`.
 
@@ -841,7 +933,9 @@ r1:16 r8:16 role=control-backup
 - **`mode=active-passive`**: only the active member (the first one alive in the
   winning partition) forwards traffic. The other stands by, and takes over the
   moment the active one fails or loses the election. The cluster's inspector
-  says who's forwarding and who's on standby.
+  says who's forwarding and who's on standby. A host whose gateway is the
+  standby's own address (not the virtual gateway) can reach the standby
+  itself, but nothing beyond it.
 - **`mode=active-active`** (the default): every active member forwards.
   Routers simply pick the shortest path.
 
@@ -876,13 +970,27 @@ internet group. An uplink through a private router or through another NAT
 counts. A LAN that happens to reach the internet through a second gateway
 doesn't. Failures don't change which side is which.
 
-A gateway with a WAN port runs **NAT**:
-- **Going out:** traffic from its LAN leaves with the gateway's WAN address. The
-  trace says `NAT at g3: (6,10) leaves as (2,2)`.
-- **Coming in:** a packet arriving on a WAN port isn't forwarded onto the LAN
-  unless it's a reply to something that went out. Otherwise it's dropped,
-  with the reason: `dropped by g4's NAT: unsolicited inbound traffic …`.
-- **Behind another NAT** (double NAT), each NAT translates in turn.
+A gateway with a WAN port runs **NAT**, and keeps a table of mappings:
+- **Going out:** each new flow (a ping, a unicast) gets a source port, and the
+  gateway maps it to a public port on its WAN address:
+  `NAT at g3: (6,10):49152 leaves as (2,2):40000`. Two hosts going to the same
+  place get different public ports. An easy NAT reuses a flow's public port
+  whatever it talks to; a hard NAT picks a new one per destination.
+- **Coming back:** replies, and unicast the remote sends back on the flow (as
+  UDP does), are addressed to the public port and translated through the
+  mapping, so they reach the host that started the flow. A new echo request
+  from outside is a new flow, not a reply, so it doesn't get in. A gateway
+  never gives a public port that a live mapping holds to another flow, and
+  says so when all of 40000–65535 are taken. A mapping lasts 60 seconds
+  after its last packet (`wait 61` and it's gone), and a gateway that fails
+  loses its mappings.
+- **Coming in uninvited:** the gateway doesn't advertise its LAN to the
+  internet, so nothing outside has a route in. ByteSim says which NAT is in
+  the way: `dropped by g4's NAT: unsolicited inbound traffic …`.
+- **Behind another NAT** (double NAT), each NAT translates in turn, and
+  replies are translated back outermost first.
+
+`nat g3` lists a gateway's mappings and when each expires.
 
 With an internet declared, `ping c1 internet` has to reach one of its gateways.
 Random traffic counts NAT drops separately.
@@ -1069,7 +1177,8 @@ them, and a group name on its own selects the group.
 | `ip [id[:port]] [addr [gw] \| dhcp \| adhoc \| none]` | | show or set addresses |
 | `dhcp`, `release`, `adhoc <id[:nic]\|all>` | | client address control |
 | `dhcpd <router> [on\|off]` | | router DHCP server |
-| `ping <src> <dst…>` | `tracert`, `traceroute` | echo and reply; groups, `all` or several destinations use multicast |
+| `ping <src> <dst…>` | | echo and reply; groups, `all` or several destinations use multicast |
+| `traceroute <src> <dst>` | `tracert` | probes with rising TTLs: each router answers time exceeded, `*` if its answer can't get back |
 | `mping <src\|all> <id\|addr\|group\|all> … [*]` | `mcastping`, `multicast-ping` | shared echo requests and replies; trailing `*` expands eligibility |
 | `trace [on\|off]` | | global full-path output; no argument shows status |
 | `detail [on\|off\|auto]` | | global diagnostic verbosity; auto adapts to batch size; no argument shows status |
@@ -1083,8 +1192,9 @@ them, and a group name on its own selects the group.
 | `tee [file\|off]` | | append console output to a text file, show status, or stop capture |
 | `broadcast <id[:port]>` | `bcast`, `flood` | flood one frame (storms in a live loop) |
 | `lag`, `lag auto`, `lag <switch\|domain> <switch\|router\|gateway\|domain>`, `unlag …`, `lags` | | find and bundle aggregatable spans |
-| `mlag <group…>`, `unmlag <group>`, `mlags` | | make a group of switches act as one (needs peer links) |
-| `stp [on\|off]`, `stp <switch…> on\|off`, `stp priority <switch> <n>` | | spanning tree |
+| `mlag <group…>`, `unmlag <group>`, `mlags` | | make a group of switches act as one (needs peer links); `mlags` shows peer state |
+| `stp [on\|off]`, `stp <switch…> on\|off`, `stp priority <switch> <n>`, `stp cost <switch:port> <n>` | | spanning tree |
+| `routes [router…]`, `route <router> <network\|default> via (n,h)\|drop\|auto` | `rib` | routing tables and static routes |
 | `renumber [auto] bfs\|dfs [root]`, `renumber off` | `rename` | renumber ids in traversal order |
 | `layout [layered\|tree\|circular\|grid\|compact\|compact-layered] [auto\|horizontal\|vertical]`, `layout list` | `auto`, `arrange` | layout and/or flow direction, in either order; no argument reuses current settings; `list` shows choices |
 | `list` | `ls` | devices, cables, groups |
@@ -1129,17 +1239,25 @@ canvas.
 
 ByteSim models the behaviours above and deliberately skips the rest:
 
-- Leases never expire, and HA coordination is instant (no heartbeat timers).
-- Every router automatically knows every network it can reach; there's no
-  real routing protocol.
+- HA coordination is instant (no heartbeat timers). Timers are fixed: leases
+  last an hour, ARP entries a minute, MAC entries five minutes, NAT mappings a
+  minute after their last packet.
+- Routing converges instantly and counts cables, not link speeds. Network ids
+  aren't prefixes, so a table has exact networks and a default route (the
+  only two prefix lengths there are).
 - Routers forward multicast as if it were unicast to each receiver.
 - In split-brain, which router a host reaches is fixed by cabling order, not
   by ARP races.
-- STP converges instantly, and every hop's ARP is a fresh broadcast (there's no
-  ARP cache).
+- STP converges instantly, and ARP entries have one fixed lifetime (no
+  reachability probing: a stale entry is dropped after the packet it lost).
 - Ping times are random. Hop counts and TTLs are real.
-- NAT decides only what gets through. Addresses stay globally unique (there are
-  no overlapping private ranges), and there are no port forwards.
+- MAC tables have no size limit, and an STP change flushes a whole area at
+  once rather than ageing it fast.
+- NAT maps addresses and ports but not protocols: ping and unicast flows are
+  mapped alike, and nothing rewrites checksums. Addresses stay globally unique
+  (there are no overlapping private ranges), and there are no port forwards.
+- Overlay tunnels decide hole punching from the NAT types (easy or hard)
+  rather than by exchanging probe packets.
 - Hole punching works unless both ends are behind hard NAT; real mesh VPNs
   sometimes get through even then (port mapping, port guessing).
 - An overlay has one exit node, used by every member, and access rules have no

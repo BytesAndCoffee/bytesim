@@ -166,6 +166,9 @@ class CloningMixin(NetworkBase):
                 self.stp_off.add(new)
             if old in self.stp_priority:
                 self.stp_priority[new] = self.stp_priority[old]
+            for (d, p), c in list(self.stp_cost.items()):
+                if d == old:
+                    self.stp_cost[new, p] = c
             if old in self.dhcp_off:
                 self.dhcp_off.add(new)
             if old in self.nat_off:
@@ -250,8 +253,6 @@ class CloningMixin(NetworkBase):
             qx, qy = self._port_like(x, px), self._port_like(y, py)
             moved += [f"{d}:p{p}→p{q}" for d, p, q in ((x, px, qx), (y, py, qy)) if p != q]
             self.links.append(Link(x, qx, y, qy, role))
-        if made:
-            self.mac_tables = {}
         return CablingResult(len(made), already, moved)
 
 

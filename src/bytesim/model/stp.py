@@ -9,6 +9,7 @@ cable it touches until the loop is broken.
 """
 from __future__ import annotations
 
+import heapq
 from collections import Counter, deque
 from dataclasses import dataclass, field
 
@@ -18,6 +19,8 @@ from .layer2 import structure_memo
 from .types import Link
 
 DEFAULT_PRIORITY = 32768
+DEFAULT_COST = 20000          # 802.1D-2004 path cost of a 1 Gb/s port
+MAX_COST = 200_000_000
 
 
 @dataclass
@@ -46,6 +49,11 @@ class SpanningTreeMixin(NetworkBase):
     def stp_enabled(self, switch: str) -> bool:
         return switch not in self.stp_off
 
+    def port_cost(self, switch: str, port: int) -> int:
+        """A port's STP path cost (a bundle costs what its cheapest member does)."""
+        ports = self.lag_ports(switch, port)  # type: ignore[attr-defined]
+        return min(self.stp_cost.get((switch, p), DEFAULT_COST) for p in ports)
+
     def bridge_id(self, switch: str) -> tuple[int, int, int]:
         """Lower wins the root election: priority, then kind and number."""
         d = self.devices[switch]
@@ -56,6 +64,8 @@ class SpanningTreeMixin(NetworkBase):
         """Could this cable forward frames, storms aside? (STP blocks optional.)"""
         if not (l.up and not l.control and self.devices[l.a].up and self.devices[l.b].up):
             return False
+        if (l.a, l.pa) in self.mlag_suspended or (l.b, l.pb) in self.mlag_suspended:
+            return False                             # an MLAG secondary's suspended member port
         return not (honor_stp and ((l.a, l.pa) in self.stp_blocked or (l.b, l.pb) in self.stp_blocked))
 
     def _trunks(self, honor_stp: bool) -> list[int]:
@@ -156,7 +166,14 @@ class SpanningTreeMixin(NetworkBase):
             for s in area:
                 roots[s] = root
             here = [i for i in trunks if self.links[i].a in area]
-            cost = self._hops_from(root, here)
+            cost = self._costs_from(root, here)
+
+            def via(i: int) -> tuple[str, int, int]:
+                """(far end, its port, the root path cost it would have through cable i)."""
+                l = self.links[i]
+                (near, _), (far, fp) = sorted([(l.a, l.pa), (l.b, l.pb)],
+                                               key=lambda e: (cost[e[0]], self.bridge_id(e[0])))
+                return far, fp, cost[near] + self.port_cost(far, fp)
 
             parent = {s: s for s in area}           # union-find over what forwards
 
@@ -167,10 +184,11 @@ class SpanningTreeMixin(NetworkBase):
                 return s
 
             def rank(i: int) -> tuple:
+                # Cables in the order the far end would pick them as its root port: root
+                # path cost through them, then the designated bridge's id and port.
                 l = self.links[i]
-                near, far = sorted([(l.a, l.pa), (l.b, l.pb)],
-                                   key=lambda e: (cost[e[0]], self.bridge_id(e[0])))
-                return (cost[far[0]], cost[near[0]], self.bridge_id(near[0]), near[1])
+                near, _ = sorted([(l.a, l.pa), (l.b, l.pb)], key=lambda e: (cost[e[0]], self.bridge_id(e[0])))
+                return (via(i)[2], self.bridge_id(near[0]), near[1])
 
             # A link aggregation is one logical link: decided once, applied to every member.
             groups: dict[object, list[int]] = {}
@@ -198,28 +216,43 @@ class SpanningTreeMixin(NetworkBase):
             # Root port: the forwarding cable that leads one hop closer to the root.
             fwd = [i for i in here if (self.links[i].a, self.links[i].pa) not in blocked
                    and (self.links[i].b, self.links[i].pb) not in blocked]
-            dist = self._hops_from(root, fwd)
+            dist = self._costs_from(root, fwd)
             for s in area:
                 if s == root or not self.stp_enabled(s) or s not in dist:
                     continue
-                best = min(((self.bridge_id(self.links[i].other(s)[0]), self.links[i].port_of(s))
+                best = min(((dist[o] + self.port_cost(s, self.links[i].port_of(s)), self.bridge_id(o),
+                             self.links[i].port_of(s))
                             for i in fwd if self.links[i].touches(s)
-                            and dist.get(self.links[i].other(s)[0], 10**9) < dist[s]), default=None)
+                            and dist.get(o := self.links[i].other(s)[0], 10**18) < dist[s]), default=None)
                 if best:
-                    root_ports[s] = best[1]
+                    root_ports[s] = best[2]
         return blocked, roots, root_ports
 
-    def _hops_from(self, start: str, trunks: list[int]) -> dict[str, int]:
+    def _costs_from(self, start: str, trunks: list[int]) -> dict[str, int]:
+        """Root path costs: entering a switch costs the port it enters by."""
         dist = {start: 0}
-        q = deque([start])
-        while q:
-            u = q.popleft()
+        heap = [(0, start)]
+        while heap:
+            d, u = heapq.heappop(heap)
+            if d > dist[u]:
+                continue
             for i in trunks:
                 l = self.links[i]
-                if l.touches(u) and (v := l.other(u)[0]) not in dist:
-                    dist[v] = dist[u] + 1
-                    q.append(v)
+                if l.touches(u):
+                    v, vp = l.other(u)
+                    c = d + self.port_cost(v, vp)
+                    if c < dist.get(v, 10**18):
+                        dist[v] = c
+                        heapq.heappush(heap, (c, v))
         return dist
+
+    def root_cost(self, switch: str) -> int | None:
+        """A switch's root path cost over forwarding cables (None outside a tree)."""
+        root = self.stp_roots.get(switch)
+        if root is None:
+            return None
+        fwd = [i for i in self._trunks(honor_stp=True) if self.stp_roots.get(self.links[i].a) == root]
+        return self._costs_from(root, fwd).get(switch)
 
     def port_role(self, switch: str, port: int) -> str:
         """root / designated / blocking / edge, or '' (unplugged, or STP off)."""
@@ -236,7 +269,7 @@ class SpanningTreeMixin(NetworkBase):
 
     def stp_update(self) -> list[str]:
         """Re-run STP and end storms whose loop is gone. Returns notes on what changed."""
-        notes = []
+        notes = self.mlag_update()  # type: ignore[attr-defined]
         before = self.stp_blocked
         self.stp_blocked, self.stp_roots, self.stp_root_ports = self.stp_compute()
         for sw, p in sorted(before - self.stp_blocked):
@@ -245,6 +278,13 @@ class SpanningTreeMixin(NetworkBase):
                 notes.append(f"STP {sw}:p{p} blocking → forwarding")
         for sw, p in sorted(self.stp_blocked - before):
             notes.append(f"STP {sw}:p{p} → blocking")
+        # A topology change (TCN): every switch in the changed area flushes its MAC
+        # table, since what it learned may now lie the other way.
+        changed = {sw for sw, _ in before ^ self.stp_blocked if sw in self.devices}
+        if changed:
+            roots = {self.stp_roots.get(sw, sw) for sw in changed}
+            self.forget_macs({sw for sw in self.devices  # type: ignore[attr-defined]
+                              if self.devices[sw].kind == "s" and self.stp_roots.get(sw, sw) in roots} | changed)
         if self.storming:
             # A storm lives as long as its area still has a forwarding loop.
             looped = {d for i in self.loop_links(honor_stp=True)
@@ -337,7 +377,7 @@ class SpanningTreeMixin(NetworkBase):
         for gen in flood.generations:
             for li, dev in gen:
                 if self.devices[dev].kind == "s":
-                    self.mac_tables.setdefault(dev, {})[mac] = self.links[li].port_of(dev)
+                    self.learn_mac(dev, mac, self.links[li].port_of(dev))  # type: ignore[attr-defined]
 
     def storm_near(self, dev_id: str) -> set[str]:
         """Storming switches in the switched area(s) this device is plugged into."""

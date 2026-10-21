@@ -215,7 +215,8 @@ class OverlayMixin(NetworkBase):
         best, err = None, None
         for e in [(dst, p) for p, _ in self.addressed(dst)]:  # type: ignore[attr-defined]
             try:
-                legs = self.route(src, e)  # type: ignore[attr-defined]
+                # Through the holes the peers punched: NAT lets the tunnel in both ways.
+                legs = self.route(src, e, nat=False)  # type: ignore[attr-defined]
             except NetError as x:
                 err = x
                 continue
@@ -386,8 +387,13 @@ class OverlayMixin(NetworkBase):
             raise NetError(f"{what} is down")
         c = self.connection(src, via, ov, acl=False)
         first, notes = c.legs, c.notes
-        second = self.route(via, dst)  # type: ignore[attr-defined]
-        if (blocked := self.nat_block(second)) is not None:  # type: ignore[attr-defined]
+        try:
+            second = self.route(via, dst)  # type: ignore[attr-defined]
+            blocked = None
+        except NetError:
+            if dst is None or (blocked := self.nat_drop(via, dst)) is None:  # type: ignore[attr-defined]
+                raise
+        if blocked is not None:
             if kind == "exit" and dst is not None and self._stays_inside(src, dst):
                 gw = blocked.split("'")[0].removeprefix("dropped by ")
                 raise NetError(f"{target} is in {src}'s own site, but with exit node {via} that traffic "

@@ -118,11 +118,25 @@ class NamingMixin(NetworkBase):
         self.lags = {frozenset(ren(d) for d in p) for p in self.lags}   # domain names map to themselves
         self.stp_off = {ren(d) for d in self.stp_off}
         self.stp_priority = {ren(d): v for d, v in self.stp_priority.items()}
+        self.stp_cost = {(ren(d), p): c for (d, p), c in self.stp_cost.items()}
+        self.static_routes = {ren(d): r for d, r in self.static_routes.items()}
+        def rk(key: str) -> str:
+            d, _, p = key.partition(":")
+            return f"{ren(d)}:{p}"
+        self.dhcp_leases = {rk(s): {rk(c): b for c, b in binds.items()} for s, binds in self.dhcp_leases.items()}
+        self.dhcp_declined = {rk(s): v for s, v in self.dhcp_declined.items()}
+        self.nat_table = {ren(g): [{**m, "remote": ren(m["remote"]) if m["remote"] in self.devices else m["remote"]}
+                                   for m in maps] for g, maps in self.nat_table.items()}
         self.stp_blocked = {(ren(d), p) for d, p in self.stp_blocked}
         self.stp_roots = {ren(d): ren(r) for d, r in self.stp_roots.items()}
         self.stp_root_ports = {ren(d): p for d, p in self.stp_root_ports.items()}
         self.storming = {ren(d) for d in self.storming}
+        self.mlag_suspended = {(ren(d), p) for d, p in self.mlag_suspended}
         self.mac_flaps = {ren(d): f for d, f in self.mac_flaps.items()}
-        self.mac_tables = {}
+        self.forget_macs()   # MACs are named after device ids
+        self.arp_cache = {(ren(d), p): {a: ((ren(o), op), t) for a, ((o, op), t) in cache.items()}
+                          for (d, p), cache in self.arp_cache.items()}
+        if self._nics_up is not None:
+            self._nics_up = {(ren(d), p, (ren(o), op)) for d, p, (o, op) in self._nics_up}
         self.notes = []
         return changed

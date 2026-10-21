@@ -1,7 +1,7 @@
 """Addresses as (network, 8-bit host); router autoconfig, DHCP and ad-hoc."""
 from __future__ import annotations
 
-from ..constants import HOST_MAX, POOL, OVERLAY_NETS, VIP_HOST
+from ..constants import HOST_MAX, LEASE_TIME, POOL, OVERLAY_NETS, VIP_HOST
 from .base import NetworkBase
 from .layer2 import route_memo, structure_memo
 from .types import Iface, NetError, fmt
@@ -117,7 +117,13 @@ class AddressingMixin(NetworkBase):
         return host
 
     def lease(self, client: tuple[str, int]) -> tuple[str, tuple[str, int] | None]:
-        """DHCP for a client NIC (falls back to ad-hoc). Returns (outcome, server)."""
+        """DHCP for a client NIC (falls back to ad-hoc). Returns (outcome, server).
+
+        The server offers the client's own binding if it has one, else the lowest free
+        host in its pool. The client ARP-probes the offer first: if something on its
+        link already has the address, it declines and the server offers the next.
+        ``dhcp_notes`` says what was declined."""
+        self.dhcp_notes = []
         ifc = self.iface(*client)
         server = self.dhcp_server(client)
         if server is None:
@@ -125,11 +131,86 @@ class AddressingMixin(NetworkBase):
             return "adhoc", None
         snet, _ = self.addr_of(server)
         gw = self.expected_gw(server)
-        if ifc.via == "dhcp" and ifc.net == snet and ifc.gw == gw:
-            return "renew", server
-        ifc.host = self._free_host(snet, ifc)
-        ifc.net, ifc.gw, ifc.via = snet, gw, "dhcp"
-        return "lease", server
+        renew = ifc.via == "dhcp" and ifc.net == snet and ifc.gw == gw
+        host = ifc.host if renew else self._offer(server, client, snet, ifc)
+        ifc.net, ifc.host, ifc.gw, ifc.via = snet, host, gw, "dhcp"
+        ifc.lease = self.clock + LEASE_TIME
+        self.dhcp_leases.setdefault(self._key(server), {})[self._key(client)] = {"host": host, "expires": ifc.lease}
+        return ("renew" if renew else "lease"), server
+
+    @staticmethod
+    def _key(ifc: tuple[str, int]) -> str:
+        return f"{ifc[0]}:{ifc[1]}"
+
+    def _offer(self, server: tuple[str, int], client: tuple[str, int], net: int, ifc: Iface) -> int:
+        """The host a server offers a client, after the client's probes have declined
+        any taken ones."""
+        key = self._key(server)
+        leases = {c: b for c, b in self.dhcp_leases.get(key, {}).items() if b["expires"] > self.clock}
+        declined = {h for h, until in self.dhcp_declined.get(key, {}).items() if until > self.clock}
+        mine = leases.get(self._key(client))
+        bound = {b["host"] for c, b in leases.items() if c != self._key(client)}
+        wanted = [mine["host"]] if mine else []
+        if ifc.net == net and ifc.host in POOL:
+            wanted.append(ifc.host)          # keep the number it already had, if it's free
+        for host in [*wanted, *(h for h in POOL if h not in wanted)]:
+            if host in bound or host in declined:
+                continue
+            if self._answers(client, (net, host)):
+                self.dhcp_declined.setdefault(key, {})[host] = self.clock + LEASE_TIME
+                self.dhcp_notes.append(f"DECLINE {fmt((net, host))}: an ARP probe found it in use")
+                continue
+            return host
+        raise NetError(f"network {net} is full: {server[0]}'s DHCP pool has no free address")
+
+    def _answers(self, nic: tuple[str, int], addr: tuple[int, int]) -> bool:
+        """An ARP probe from nic: does anything on its link already have addr?"""
+        return any(self.addr_of(e) == addr for e in self.segment(*nic))  # type: ignore[attr-defined]
+
+    def dhcp_release(self, client: tuple[str, int]) -> None:
+        """A RELEASE: the client's server forgets its binding."""
+        for binds in self.dhcp_leases.values():
+            binds.pop(self._key(client), None)
+
+    def age_leases(self) -> list[str]:
+        """Clients renew at half-time (T1) while their server answers; a lease that runs
+        out is released. Servers forget expired bindings and declines."""
+        notes = []
+        half = LEASE_TIME / 2
+        for d in self.sorted_devices():
+            if d.kind != "c":
+                continue
+            for p in range(1, d.nports + 1):
+                ifc = self.ifaces.get(f"{d.id}:{p}")
+                if ifc is None or ifc.via != "dhcp" or ifc.lease is None:
+                    continue
+                nic, name = (d.id, p), f"{d.id}:{d.port_name(p)}"
+                server = self.dhcp_server(nic) if d.up and self.link_index(*nic) is not None else None
+                if server is not None and self.addr_of(server)[0] != ifc.net:
+                    server = None
+                renewed = False
+                while ifc.lease - half <= self.clock and server is not None:
+                    ifc.lease = ifc.lease - half + LEASE_TIME      # renewed at T1
+                    renewed = True
+                if renewed:
+                    self.dhcp_leases.setdefault(self._key(server), {})[self._key(nic)] = {
+                        "host": ifc.host, "expires": ifc.lease}
+                    notes.append(f"{name} renewed {fmt(ifc.addr)} with {server[0]}")
+                elif ifc.lease <= self.clock:
+                    notes.append(f"{name}: lease on {fmt(ifc.addr)} expired (no server answered), released")
+                    self.dhcp_release(nic)
+                    ifc.clear()
+                    self.adhoc(nic)
+                    notes.append(f"{name} → {fmt(ifc.addr)} via adhoc")
+        for key in list(self.dhcp_leases):
+            self.dhcp_leases[key] = {c: b for c, b in self.dhcp_leases[key].items() if b["expires"] > self.clock}
+            if not self.dhcp_leases[key]:
+                del self.dhcp_leases[key]
+        for key in list(self.dhcp_declined):
+            self.dhcp_declined[key] = {h: t for h, t in self.dhcp_declined[key].items() if t > self.clock}
+            if not self.dhcp_declined[key]:
+                del self.dhcp_declined[key]
+        return notes
 
     def expected_gw(self, server: tuple[str, int]) -> int:
         """Gateway a DHCP server hands out: its own host, or its cluster's virtual one."""
@@ -156,6 +237,7 @@ class AddressingMixin(NetworkBase):
         (the UI animates their DHCP exchange itself).
         """
         notes = self.stp_update()  # type: ignore[attr-defined]
+        self.flush_macs()  # type: ignore[attr-defined]
         notes += [f"addr {n}" for n in self.autoconf_routers()]
         for d in self.sorted_devices():
             if d.kind != "c":
@@ -187,4 +269,25 @@ class AddressingMixin(NetworkBase):
                     notes.append(f"{name}: {e}")
                 if ifc.addr != old:
                     notes.append(f"{name} → {fmt(ifc.addr)} via {ifc.via}")
+        notes += self._gratuitous_arps()
+        return notes
+
+    def _gratuitous_arps(self) -> list[str]:
+        """A computer whose link has just come up announces itself (gratuitous ARP), so
+        switches learn where it now is. Into a live loop, that sets off a storm."""
+        up = {(d.id, p, self.links[li].other(d.id)) for d in self.devices.values() if d.kind == "c" and d.up
+              for p, _ in self.addressed(d.id)
+              if (li := self._logical_link(d.id, p)) is not None and self.usable(self.links[li])}  # type: ignore[attr-defined]
+        before, self._nics_up = self._nics_up, up       # keyed by what's at the other end: a move counts
+        notes = []
+        for d, p, _ in sorted(up - before) if before is not None else []:
+            nic = (d, p)
+            fl = self.flood(nic)  # type: ignore[attr-defined]
+            if fl.storm:
+                self.start_storm(fl)  # type: ignore[attr-defined]
+                notes.append(f"{nic[0]}'s gratuitous ARP set off a broadcast storm on "
+                             f"{' '.join(sorted(fl.storm_switches, key=self.bridge_id))}")  # type: ignore[attr-defined]
+            else:
+                self.learn_flood(fl)  # type: ignore[attr-defined]
+                self.arp_announce(nic, fl.delivered)  # type: ignore[attr-defined]
         return notes

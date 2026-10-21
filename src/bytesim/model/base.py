@@ -22,6 +22,16 @@ class NetworkBase:
         self.ifaces: dict[str, Iface] = {}        # "c1:1" -> Iface
         self.dhcp_off: set[str] = set()           # routers/gateways not serving DHCP
         self.mac_tables: dict[str, dict[str, int]] = {}   # switch -> {mac: port}
+        self.mac_seen: dict[str, dict[str, float]] = {}   # switch -> {mac: clock when last heard}
+        self.arp_cache: dict[tuple[str, int], dict[tuple[int, int], tuple[tuple[str, int], float]]] = {}
+        #   interface -> {address: (interface that has it, clock when the entry expires)}
+        self.nat_table: dict[str, list[dict]] = {}   # NAT gateway -> its live mappings (see wan.py)
+        self._ports = 0                           # ephemeral source ports handed out so far
+        self.dhcp_leases: dict[str, dict[str, dict]] = {}   # server "r1:2" -> {client "c1:1": {host, expires}}
+        self.dhcp_declined: dict[str, dict[int, float]] = {}  # server -> {host: clock until it's offered again}
+        self.dhcp_notes: list[str] = []           # what the last lease() exchanged (DECLINEs)
+        self.clock = 0.0                          # simulated seconds; `wait` and the app advance it
+        self._nics_up: set[tuple] | None = None   # (computer, port, far end) live at the last reconcile
         self.clusters: dict[str, str] = {}        # HA cluster (a group of routers) -> split policy
         self.cluster_modes: dict[str, str] = {}   # cluster -> "active-passive" (absent: active-active)
         self.lags: set[frozenset[str]] = set()    # bundles: pairs of ends (a device, or an MLAG domain)
@@ -34,10 +44,15 @@ class NetworkBase:
         self.notes: list[str] = []                # remarks from the last route() for the console
         self.stp_off: set[str] = set()            # switches with spanning tree switched off
         self.stp_priority: dict[str, int] = {}    # bridge priority (default 32768; lower = root)
+        self.stp_cost: dict[tuple[str, int], int] = {}   # (switch, port) -> path cost (default 20000)
+        self.static_routes: dict[str, dict[int, tuple[int, int] | str]] = {}
+        #   router -> {network (0 = default): next-hop address, or "drop"}
         self.stp_blocked: set[tuple[str, int]] = set()    # (switch, port) held blocking by STP
         self.stp_roots: dict[str, str] = {}       # switch -> its area's root bridge
         self.stp_root_ports: dict[str, int] = {}  # switch -> port toward the root
         self.storming: set[str] = set()           # switches drowning in a broadcast storm
+        self.mlag_suspended: set[tuple[str, int]] = set()   # MLAG member ports a secondary suspended
+        self.mlag_dual: set[str] = set()          # MLAG domains that lost peer link and keepalive
         self.mac_flaps: dict[str, dict[str, set[int]]] = {}  # switch -> mac -> ports it flapped between
 
     def get(self, dev_id: str) -> Device:

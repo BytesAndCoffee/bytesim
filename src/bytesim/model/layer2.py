@@ -2,18 +2,32 @@
 from __future__ import annotations
 
 import functools
-import zlib
+import hashlib
 from collections import deque
 from contextlib import contextmanager
 
+from ..constants import MAC_AGE
 from .base import NetworkBase
 from .types import Link
 
 
-def flow_pick(options: list, flow: str, salt: object = "") -> object:
-    """Choose one of several equal options for a flow: stable across runs, the same
-    every time for the same flow, spread across different flows (CRC32, not hash())."""
-    return options[zlib.crc32(f"{flow}|{salt}".encode()) % len(options)]
+def member_pick(options: list[int], links: list, flow: str, salt: object = "") -> int:
+    """Choose a bundle member for a flow by rendezvous hashing: each member scores the
+    flow, the highest score wins. The same flow keeps its member, and when a member
+    fails only the flows it carried move (the others' winners are still there)."""
+    def score(j: int) -> int:
+        l = links[j]
+        key = f"{flow}|{salt}|{l.a}:{l.pa}-{l.b}:{l.pb}".encode()
+        return int.from_bytes(hashlib.blake2b(key, digest_size=8).digest(), "big")   # CRC32 is linear: scores would correlate
+    return max(options, key=lambda j: (score(j), -j))
+
+
+def flow_choice(options: list, flow: str, salt: object = "") -> object:
+    """Rendezvous choice among equal options (ECMP next hops): a flow keeps its
+    choice, and losing an option moves only the flows that had chosen it."""
+    def score(o: object) -> int:
+        return int.from_bytes(hashlib.blake2b(f"{flow}|{salt}|{o!r}".encode(), digest_size=8).digest(), "big")
+    return max(options, key=score)
 
 
 def structure_memo(fn):
@@ -55,6 +69,8 @@ def route_memo(fn):
 
 
 class Layer2Mixin(NetworkBase):
+    flooded: list[str] = []          # set by forward(): switches that flooded the last frame
+
     @contextmanager
     def remembering(self):
         """A scope in which the structure is remembered (nothing may change it meanwhile)."""
@@ -245,14 +261,75 @@ class Layer2Mixin(NetworkBase):
             return li
         if flow is None:
             return li if li in options else options[0]
-        return flow_pick(options, flow, sorted(pair))
+        return member_pick(options, self.links, flow, sorted(pair))
+
+    def mlag_state_key(self) -> tuple:
+        """What MLAG's peer state has decided (routing depends on it)."""
+        return frozenset(self.mlag_suspended), frozenset(self.mlag_dual)
+
+    def mlag_peer_state(self, g: str) -> tuple[str, str | None, bool, bool]:
+        """(state, primary, peer link up, keepalive up) for an MLAG domain. state is
+        "ok", "peer-down" (the secondaries suspend their MLAG ports), "dual-active"
+        (peer link and keepalive both down: every switch thinks it's primary), or
+        "single" (one switch left alive)."""
+        devs = self.devices_in(g)  # type: ignore[attr-defined]
+        alive = [d for d in devs if self.devices[d].up]
+        primary = min(alive, key=self.bridge_id) if alive else None  # type: ignore[attr-defined]
+        inside = [l for l in self.links if l.a in devs and l.b in devs and l.a != l.b
+                  and l.up and self.devices[l.a].up and self.devices[l.b].up]
+        peer = any(not l.control for l in inside)
+        keepalive = any(l.control for l in inside)
+        if len(alive) < 2:
+            return "single", primary, peer, keepalive
+        if peer:
+            return "ok", primary, peer, keepalive
+        return ("peer-down" if keepalive else "dual-active"), primary, peer, keepalive
+
+    def mlag_update(self) -> list[str]:
+        """Apply every domain's peer state: suspend secondaries' MLAG member ports when
+        the peer link is down but the keepalive says the primary lives. Returns notes
+        on what changed."""
+        before, dual_before = self.mlag_suspended, self.mlag_dual
+        suspended: set[tuple[str, int]] = set()
+        dual: set[str] = set()
+        notes = []
+        for g in sorted(self.mlag_domains):
+            state, primary, _, _ = self.mlag_peer_state(g)
+            if state == "dual-active":
+                dual.add(g)
+            if state != "peer-down":
+                continue
+            for l in self.links:
+                pair = self._bundle_of(l, {d: self.end(d) for d in (l.a, l.b)})
+                if pair is None or g not in pair:
+                    continue
+                for d, p in ((l.a, l.pa), (l.b, l.pb)):
+                    if self.end(d) == g and d != primary:
+                        suspended.add((d, p))
+        self.mlag_suspended, self.mlag_dual = suspended, dual
+        for g in sorted(self.mlag_domains):
+            mine = {e for e in suspended if self.end(e[0]) == g}
+            if mine and not {e for e in before if e[0] in self.devices and self.end(e[0]) == g}:
+                who = sorted({d for d, _ in mine})
+                notes.append(f"MLAG {g}: peer link down, keepalive up: {' '.join(who)} (secondary) "
+                             f"suspends its MLAG ports")
+            if g in dual and g not in dual_before:
+                notes.append(f"⚠ MLAG {g}: peer link and keepalive both down: DUAL-ACTIVE, every switch "
+                             f"forwards as primary")
+            if g in dual_before and g not in dual or (not mine and any(
+                    e[0] in self.devices and self.end(e[0]) == g for e in before)):
+                notes.append(f"MLAG {g}: peers back in touch")
+        return notes
 
     def usable(self, l: Link) -> bool:
         """Can this cable carry data? Not if it's down, a control link, an end is dead,
-        STP is blocking either end, or a broadcast storm has saturated it."""
+        STP is blocking either end, an MLAG secondary suspended it, or a broadcast
+        storm has saturated it."""
         return (l.up and not l.control and self.devices[l.a].up and self.devices[l.b].up
                 and (l.a, l.pa) not in self.stp_blocked and (l.b, l.pb) not in self.stp_blocked
-                and l.a not in self.storming and l.b not in self.storming)
+                and l.a not in self.storming and l.b not in self.storming
+                and (not self.mlag_suspended or ((l.a, l.pa) not in self.mlag_suspended
+                                                 and (l.b, l.pb) not in self.mlag_suspended)))
 
     @route_memo
     @structure_memo
@@ -290,6 +367,9 @@ class Layer2Mixin(NetworkBase):
         path = self._l2path(src, dst, key)
         if path is None:
             return path
+        return self._hash_members(path, key)
+
+    def _hash_members(self, path: list[tuple[str, int]], key: str) -> list[tuple[str, int]]:
         out = list(path)
         for k in range(1, len(path)):              # every hop over a bundle: the same flow hash
             dev, li = path[k]
@@ -298,7 +378,7 @@ class Layer2Mixin(NetworkBase):
                 here = {self.links[li].a, self.links[li].b}   # parallel members between these two
                 options = [j for j in self.members(pair) if {self.links[j].a, self.links[j].b} == here]
                 if options:
-                    out[k] = (dev, flow_pick(options, key, sorted(pair)))
+                    out[k] = (dev, member_pick(options, self.links, key, sorted(pair)))
         return out
 
     def _l2path(self, src: tuple[str, int], dst: tuple[str, int],
@@ -332,12 +412,122 @@ class Layer2Mixin(NetworkBase):
                     q.append(w)
         return None
 
+    def _toward(self, sw: str, came_by: int, arrive: set[tuple[str, int]]) -> int | None:
+        """The cable a flooded frame's copy leaves a switch by on its way to arrive
+        (never back the way it came), or None if no copy gets there."""
+        first: dict[str, int] = {sw: -1}
+        came = self.bundle(self.links[came_by])
+        q = deque([sw])
+        while q:
+            u = q.popleft()
+            for i, l in self.adjacent_links(u):
+                if i == came_by or not self.usable(l) or (u == sw and came is not None and self.bundle(l) == came):
+                    continue
+                w, wp = l.other(u)
+                if (w, wp) in arrive:
+                    return i if u == sw else first[u]
+                if self.devices[w].kind == "s" and w not in first:
+                    first[w] = i if u == sw else first[u]
+                    q.append(w)
+        return None
+
+    @structure_memo
+    def forward(self, src: tuple[str, int], dst: tuple[str, int],
+                flow: str | None = None) -> tuple[list[tuple[str, int]] | None, str]:
+        """Follow a unicast frame by the switches' MAC tables: (path, "") or (None, why).
+        ``self.flooded`` lists the switches that didn't know the destination.
+
+        A switch that knows the destination MAC sends the frame out of that port
+        only; one that doesn't floods it, and the copy heading for the destination
+        is the one followed. A wrong entry misdelivers or drops the frame. Entries
+        on cables that can't carry data count as forgotten (a link-down flush), and
+        an MLAG switch whose entry points over its peer link lets the domain, which
+        shares one table, pick the way."""
+        key = flow or f"{src}>{dst}"
+        mac = self.devices[dst[0]].mac(dst[1])
+        arrive = {(dst[0], p) for p in self.lag_ports(*dst)}
+        li = self._logical_link(src[0], src[1], key)
+        if li is None or not self.usable(self.links[li]):
+            return None, f"{src[0]}'s cable can't carry data"
+        path, u, seen = [(src[0], -1)], src[0], set()
+        self.flooded = []
+        while True:
+            v, vp = self.links[li].other(u)
+            path.append((v, li))
+            if (v, vp) in arrive:
+                return self._hash_members(path, key), ""
+            if self.devices[v].kind != "s":
+                return None, f"the frame for {mac} reached {v} instead (it drops it)"
+            if (v, li) in seen:
+                return None, f"the frame for {mac} loops through {v} (stale MAC tables)"
+            seen.add((v, li))
+            entry = self.mac_tables.get(v, {}).get(mac)
+            out = self.link_index(v, entry) if entry is not None else None
+            if out is not None and (not self.usable(self.links[out]) or self.is_peer_link(self.links[out])):
+                out = None
+            if out is not None:
+                came = self.bundle(self.links[li])
+                if out == li or (came is not None and came == self.bundle(self.links[out])):
+                    return None, (f"{v}'s MAC table has {mac} on port {entry}, where the frame came in "
+                                  f"(it filters it)")
+            else:
+                self.flooded.append(v)
+                out = self._toward(v, li, arrive)
+                if out is None:
+                    return None, f"{v} floods the frame for {mac}, but no copy reaches it"
+            u, li = v, out
+
     def learn(self, src: tuple[str, int], path: list[tuple[str, int]]) -> None:
         """Switches along a frame's path learn the sender's MAC on the ingress port."""
         mac = self.devices[src[0]].mac(src[1])
         for dev_id, li in path[1:]:
             if self.devices[dev_id].kind == "s":
-                self.mac_tables.setdefault(dev_id, {})[mac] = self.links[li].port_of(dev_id)
+                self.learn_mac(dev_id, mac, self.links[li].port_of(dev_id))
+
+    def learn_mac(self, switch: str, mac: str, port: int) -> None:
+        """One MAC heard on one port: (re)learned there, a move if it was elsewhere."""
+        self.mac_tables.setdefault(switch, {})[mac] = port
+        self.mac_seen.setdefault(switch, {})[mac] = self.clock
+
+    def forget_macs(self, switches: set[str] | None = None) -> None:
+        """Empty the MAC tables of some switches (every switch if None)."""
+        for sw in list(self.mac_tables) if switches is None else switches:
+            self.mac_tables.pop(sw, None)
+            self.mac_seen.pop(sw, None)
+
+    def _drop_mac(self, switch: str, mac: str) -> None:
+        self.mac_tables[switch].pop(mac, None)
+        self.mac_seen.get(switch, {}).pop(mac, None)
+        if not self.mac_tables[switch]:
+            self.forget_macs({switch})
+
+    def flush_ports(self, ports: set[tuple[str, int]]) -> None:
+        """A port's link went down: its switch forgets the MACs it learned there."""
+        for sw, p in ports:
+            for mac, at in list(self.mac_tables.get(sw, {}).items()):
+                if at == p:
+                    self._drop_mac(sw, mac)
+
+    def flush_macs(self) -> None:
+        """Forget entries on ports whose cable is gone or can't carry data (link down)."""
+        dead = set()
+        for sw, table in self.mac_tables.items():
+            if sw not in self.devices:
+                dead |= {(sw, p) for p in table.values()}
+                continue
+            for p in set(table.values()):
+                li = self.link_index(sw, p)
+                if li is None or not self.usable(self.links[li]):
+                    dead.add((sw, p))
+        self.forget_macs({sw for sw, _ in dead if sw not in self.devices})
+        self.flush_ports({e for e in dead if e[0] in self.devices})
+
+    def age_macs(self) -> None:
+        """Entries not heard from for MAC_AGE seconds age out."""
+        for sw, seen in list(self.mac_seen.items()):
+            for mac, t in list(seen.items()):
+                if self.clock - t >= MAC_AGE:
+                    self._drop_mac(sw, mac)
 
 
     # ---- graph-only mode -----------------------------------------------

@@ -150,6 +150,10 @@ def _clone_equivalent(net: Network, a: str, b: str, phi: dict[str, str]) -> bool
             return False
         if (x in net.stp_off) != (y in net.stp_off) or net.stp_priority.get(x) != net.stp_priority.get(y):
             return False
+        if any(net.stp_cost.get((x, p)) != net.stp_cost.get((y, p)) for p in range(1, dx.nports + 1)):
+            return False
+        if x in net.static_routes or y in net.static_routes:
+            return False                       # next hops are addresses, which a copy doesn't keep
         if ((x in net.dhcp_off) != (y in net.dhcp_off) or (x in net.nat_off) != (y in net.nat_off)
                 or (x in net.nat_hard) != (y in net.nat_hard)):
             return False
@@ -260,6 +264,7 @@ def _explicit_cost(net: Network, g: str) -> int:
     return (len({d[0] for d in devs}) + len(_subtree(net, g))
             + sum(1 for l in net.links if l.a in inside and l.b in inside)
             + sum(1 for d in devs if d in net.stp_priority or d in net.dhcp_off)
+            + sum(1 for s, _ in net.stp_cost if s in inside)
             + sum(1 for x in _subtree(net, g) if x in net.clusters))
 
 
@@ -562,6 +567,12 @@ def render(net: Network, subs: list[Substitution], mode: str = "readable") -> tu
             cmds += ip_commands(d)
             if d in net.stp_priority:
                 cmds.append(f"stp priority {d} {net.stp_priority[d]}")
+            for (s, p), c in sorted(net.stp_cost.items()):
+                if s == d:
+                    cmds.append(f"stp cost {d}:{p} {c}")
+            for n, t in sorted(net.static_routes.get(d, {}).items()):
+                where = "default" if n == 0 else n
+                cmds.append(f"route {d} {where} drop" if t == "drop" else f"route {d} {where} via ({t[0]},{t[1]})")
             if d in net.dhcp_off:
                 cmds.append(f"dhcpd {d} off")
             if d in net.stp_off:

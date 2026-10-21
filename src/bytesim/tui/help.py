@@ -16,7 +16,9 @@ HELP = """\
                                     also [cyan]mcast ping[/]; global [cyan]detail on[/] logs every reply
                                     global [cyan]trace on[/] shows full paths with ports, cable roles and link numbers
                                     bare device targets choose fewest hops, then lowest port; [cyan]r1:p2[/] selects an interface
-  [cyan]unicast[/] <src> <id|addr>         one-way packet to a single device
+  [cyan]traceroute[/] <src> <dst>          every router on the way (TTL 1, 2, 3…), then the destination
+  [cyan]wait[/] <seconds>                   let simulated time pass: ARP, MAC, NAT entries and leases age
+  [cyan]unicast[/] <src> <id|addr>         one-way packet to a single device; [i]c1:2[/] sends from that NIC
   [cyan]multicast[/] <src> <ids|groups|all> one packet, copied where paths split, e.g. [i]mcast c1 pcs c8[/]
   [cyan]group[/] <name> <id|group ...>      logical layer; groups nest, e.g. [i]group dc1 fab1 rfab1[/]
   [cyan]group[/] <name>  or  <name>         select a group (arrows / drag its frame move everything in it)
@@ -58,7 +60,8 @@ HELP = """\
   [cyan]lag[/] (find spans) · [cyan]lag auto[/] · [cyan]lag[/] <switch|domain> <switch|router|gateway|domain> · [cyan]unlag[/] … · [cyan]lags[/]
   [cyan]mlag[/] <group…> · [cyan]unmlag[/] <group> · [cyan]mlags[/] · [cyan]demo mlag[/]   a group of switches acts as one (peer links needed), like vPC
                                     bundle parallel cables into one link (no STP blocking, flows spread)
-  [cyan]stp[/]  ·  [cyan]stp[/] on|off  ·  [cyan]stp[/] <switch…> on|off  ·  [cyan]stp priority[/] <switch> <n>  ·  [cyan]demo loop[/]
+  [cyan]routes[/] \\[router…]  ·  [cyan]route[/] <router> <net|default> via (n,h) | drop | auto   routing tables, static routes
+  [cyan]stp[/]  ·  [cyan]stp[/] on|off  ·  [cyan]stp[/] <switch…> on|off  ·  [cyan]stp priority[/] <switch> <n>  ·  [cyan]stp cost[/] <switch:port> <n>  ·  [cyan]demo loop[/]
 [b]Roles, failures, HA[/]
   [cyan]<id> <id> role=[/]data|control|control-backup|fabric   cable with a role (control = heartbeat only, ═)
   [cyan]role[/] <id:port>|<id> <id> <role>       change a cable's role  (fabric = router↔router data, ━)
@@ -68,7 +71,7 @@ HELP = """\
   [cyan]cluster[/] <name>  ·  [cyan]clusters[/]  ·  [cyan]uncluster[/] <name>  ·  [cyan]demo ha[/]
 [b]Internet and NAT[/]
   [cyan]internet[/] <group> | off  ·  [cyan]internet[/]   that group is the public internet; gateways cabled to it face it
-  [cyan]nat[/] <gateway…> on|off|easy|hard  ·  [cyan]demo internet[/]   NAT (on, easy by default) drops unsolicited inbound traffic
+  [cyan]nat[/] <gateway…> on|off|easy|hard  ·  [cyan]nat[/] <gateway>  ·  [cyan]demo internet[/]   stateful NAT (on, easy by default): mappings, replies in, unsolicited dropped
   [cyan]overlay[/] <name> <device|group…> \\[host=n] · [cyan]overlay[/] <name> remove … · [cyan]overlay off[/] <name> · [cyan]overlay[/] \\[<name>]
                                     overlay addresses (100,n) that reach each other through NAT: [cyan]ping c1 c3@<name>[/] · [cyan]ping c1 all@<name>[/]
   [cyan]overlay[/] <name> peers <member>  ·  [cyan]demo overlay[/]   how one member connects to each of the others

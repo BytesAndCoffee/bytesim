@@ -307,11 +307,15 @@ class TopologyCommands(CommandHost):
         elif len(args) == 1 and REF.match(args[0]) and self._ref(args[0])[1] is None:
             d = net.get(self._ref(args[0])[0])
             d.up = up
+            if not up:                            # a failed device comes back empty, like a reboot
+                net.arp_forget(d.id)
+                net.forget_macs({d.id})
+                net.nat_forget(d.id)
             self.log_msg(f"[{'green' if up else 'red'}]{'✓' if up else '✕'} {d.id} {verb}[/]")
         else:
             for l in self._links_matching(args):
                 l.up = up
                 self.log_msg(f"[{'green' if up else 'red'}]{'✓' if up else '✕'}[/] cable "
                              f"{self._link_text(l, state=False)} {verb}")
-        net.mac_tables = {}
+        net.flush_macs()                  # link down: switches forget what was learned there
         self.changed()

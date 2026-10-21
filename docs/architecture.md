@@ -19,16 +19,18 @@ src/bytesim/
 │   ├── base.py          NetworkBase: the state + basic lookups
 │   ├── groups.py        nestable groups, frame bounds
 │   ├── cloning.py       clone_group(): devices, nested groups, internal cables
-│   ├── layer2.py        usable cables, broadcast domains, frame paths, MAC learning, graph-mode BFS
-│   ├── addressing.py    router autoconfig, DHCP, ad-hoc, reconcile()
-│   ├── routing.py       host → gateway → cheapest router path
+│   ├── layer2.py        usable cables, broadcast domains, frame paths, MAC tables (learning, aging,
+│   │                    flushes), forwarding by them, graph-mode BFS
+│   ├── addressing.py    router autoconfig, DHCP, ad-hoc, reconcile(), gratuitous ARP
+│   ├── arp.py           per-interface ARP caches: lookup, expiry, gratuitous updates
+│   ├── routing.py       routing tables (link-state SPF, static, default) and hop-by-hop forwarding
 │   ├── ha.py            clusters: partitions, policies, virtual-gateway owners
 │   ├── layout.py        layered, tree, circular, grid and compact variants
 │   ├── naming.py        BFS/DFS traversal, renumber()
 │   ├── stp.py           spanning tree, loop detection, flooding, storms
 │   ├── equivalence.py   canonical form of a network; differences()
 │   ├── traffic.py       random traffic: generator (seeded), cable load, statistics
-│   ├── wan.py           the declared internet: WAN ports, NAT (what gets through, translations)
+│   ├── wan.py           the declared internet: WAN ports, stateful NAT (mappings, returns, expiry)
 │   ├── overlay.py       mesh-VPN overlays: addresses, direct/relayed connections, subnet routers,
 │   │                    exit nodes, access rules
 │   └── network.py       Network = all mixins + editing + JSON
@@ -78,9 +80,15 @@ The model's core questions are answered by a few functions:
   has saturated it. Everything that forwards goes through this.
 - `segment(dev, port)`: the broadcast domain seen from one interface (every
   other interface reachable through switches alone).
-- `l2path(src_iface, dst_iface)`: the frame path between two interfaces.
-- `route(src, dst_iface)`: a list of **legs**, each one layer-2 hop between
-  addressed interfaces: `(from_iface, to_iface, frame_path)`.
+- `l2path(src_iface, dst_iface)`: the frame path between two interfaces, as
+  switches that have just learned both ends by ARP forward it. Routing plans with it.
+- `forward(src_iface, dst_iface)`: the frame path by the switches' MAC tables as
+  they are now (unknown destinations flood), or `None` and why it was lost. The
+  traffic commands run each hop's ARP exchange, teaching the tables, then send
+  the frame with this.
+- `route(src, dst_iface, port=None)`: a list of **legs**, each one layer-2 hop between
+  addressed interfaces: `(from_iface, to_iface, frame_path)`. A `port` binds a
+  computer's packet to that interface.
 - `ha_state(cluster)`: partitions, active sides, virtual-gateway owners, and
   a health level.
 - `stp_update()`: recomputes blocked ports (union-find over the switch graph,
@@ -271,6 +279,12 @@ pytest
   `conftest.py`.
 - `tests/test_app.py` drives the real app headlessly with Textual's
   `run_test()` and waits for packet animations to finish.
+- `tests/test_fidelity.py` holds each mechanism to its real behaviour: echo
+  replies, TTL, MAC tables and aging, ARP caches, STP costs, routing tables,
+  stateful NAT, DHCP leases, MLAG peer state, traceroute.
+- `tests/test_invariants.py` runs seeded random fault sequences on the demos
+  and checks every delivered packet's trace hop by hop, without trusting the
+  path search.
 
 ## Releasing
 
