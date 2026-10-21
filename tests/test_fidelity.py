@@ -466,3 +466,113 @@ def test_stp_costs_survive_saves_exports_and_topologies():
         r.run("stp cost s4:9 5")
     r.run("stp cost s4:1 default")
     assert not net.stp_cost
+
+
+# ---- routing tables ------------------------------------------------------------------
+
+def diamond():
+    """c1 - r1 = (r2 | r3) = r4 - c2, plus c3 on r4: two equal ways from r1 to r4."""
+    net = build(["c", ("r", 6), ("r", 6), ("r", 6), ("r", 6), "c", "c"],
+                [("c1", "r1"), ("r1", "r2"), ("r1", "r3"), ("r2", "r4"), ("r3", "r4"), ("r4", "c2"), ("r4", "c3")])
+    return net, ScriptRunner(net)
+
+
+def via(net, src, dst):
+    return [leg[1][0] for leg in net.route(src, (dst, 1))][1:-1]
+
+
+def test_tables_hold_connected_learned_and_ecmp_routes():
+    net, r = diamond()
+    table = net.routing_table("r1")
+    c2net = net.addr_of(("c2", 1))[0]
+    assert table[net.addr_of(("c1", 1))[0]].kind == "connected"
+    assert table[c2net].kind == "learned" and table[c2net].cost == 2 and len(table[c2net].hops) == 2
+    r.run("routes r1")
+    assert f"network {c2net}" in plain(r) and "ECMP" in plain(r)
+
+
+def test_a_flow_keeps_its_next_hop_and_flows_use_both():
+    from bytesim.model.layer2 import flow_choice
+    net, _ = diamond()
+    assert len({via(net, "c1", "c2")[0] for _ in range(5)}) == 1
+    hops = net.routing_table("r1")[net.addr_of(("c2", 1))[0]].hops
+    picks = [flow_choice(hops, f"c{i}>c2", "r1")[1][0] for i in range(64)]
+    assert set(picks) == {"r2", "r3"} and min(picks.count("r2"), picks.count("r3")) > 16
+    lost = [i for i, p in enumerate(picks) if p == "r2"]
+    survivors = [flow_choice([h for h in hops if h[1][0] == "r3"], f"c{i}>c2", "r1")[1][0] for i in range(64)]
+    assert all(survivors[i] == picks[i] for i in range(64) if i not in lost)
+
+
+def test_a_static_route_changes_only_the_traffic_that_depends_on_it():
+    net, r = diamond()
+    c2net, c3net = net.addr_of(("c2", 1))[0], net.addr_of(("c3", 1))[0]
+    before = via(net, "c1", "c3")
+    other = "r3" if via(net, "c1", "c2")[0] == "r2" else "r2"
+    hop = next(net.addr_of(e) for _, e in net.routing_table("r1")[c2net].hops if e[0] == other)
+    r.run(f"route r1 {c2net} via ({hop[0]},{hop[1]})")
+    assert via(net, "c1", "c2")[0] == other
+    assert via(net, "c1", "c3") == before
+    assert net.routing_table("r1")[c3net].kind == "learned"
+
+
+def test_no_route_means_unreachable_even_with_a_physical_path():
+    net, r = diamond()
+    c2net = net.addr_of(("c2", 1))[0]
+    r.run(f"route r1 {c2net} drop")
+    with pytest.raises(NetError, match=f"r1 drops traffic for network {c2net}"):
+        r.run("ping c1 c2")
+    r.run(f"route r1 {c2net} auto")
+    r.run("ping c1 c2")
+    assert "  reply from c2" in plain(r)
+
+
+def test_withdrawn_routes_move_and_a_dead_static_next_hop_is_uninstalled():
+    net, r = diamond()
+    c2net = net.addr_of(("c2", 1))[0]
+    first = via(net, "c1", "c2")[0]
+    hop = next(net.addr_of(e) for _, e in net.routing_table("r1")[c2net].hops if e[0] == first)
+    r.run(f"route r1 {c2net} via ({hop[0]},{hop[1]})")
+    r.run(f"fail {first}")
+    net.reconcile()
+    table = net.routing_table("r1")[c2net]
+    assert table.kind == "learned" and len(table.hops) == 1          # the static one isn't installed
+    assert via(net, "c1", "c2")[0] != first
+
+
+def test_a_static_routing_loop_runs_out_of_ttl():
+    net, r = diamond()
+    c2net = net.addr_of(("c2", 1))[0]
+    r1_on_r2 = next(net.addr_of(e) for _, e in net.routing_table("r2")[net.addr_of(("c1", 1))[0]].hops)
+    r2_on_r1 = next(net.addr_of(e) for _, e in net.routing_table("r1")[c2net].hops if e[0] == "r2")
+    r.run(f"route r1 {c2net} via ({r2_on_r1[0]},{r2_on_r1[1]})\nroute r2 {c2net} via ({r1_on_r2[0]},{r1_on_r2[1]})")
+    with pytest.raises(NetError, match="TTL expired"):
+        r.run("unicast c1 c2")
+
+
+def test_a_default_route_reaches_the_gateway():
+    net = build(["c", "r", "r", "g"], [("c1", "r1"), ("r1", "r2"), ("r2", "g1")])
+    assert net.routing_table("r1")[0].kind == "default"
+    assert net.routing_table("g1")[0].kind == "exit"
+    assert [leg[1][0] for leg in net.route("c1", None)] == ["r1", "r2", "g1"]
+
+
+def test_an_on_link_destination_on_another_segment_is_not_sent_to_the_gateway():
+    net = build(["c", "r", "r", "c"], [("c1", "r1"), ("r1", "r2"), ("r2", "c2")])
+    r = ScriptRunner(net)
+    r.run("ip c1 (1,10) 1\nip c2 (1,20)")
+    with pytest.raises(NetError, match="on c1's own network 1, but nothing on c1:nic1's link has it"):
+        r.run("unicast c1 c2")
+
+
+def test_static_routes_survive_saves_exports_and_topologies():
+    from bytesim.model import Network as N
+    from bytesim.synthesis import synthesize
+    from bytesim.topology import dump_topology, load_topology
+    net, r = diamond()
+    r.run("route r1 9 drop\nroute r1 default via (2,2)")
+    want = {"r1": {9: "drop", 0: (2, 2)}}
+    assert N.from_json(net.to_json()).static_routes == want
+    assert load_topology(dump_topology(net)).static_routes == want
+    exported = synthesize(net)
+    assert "route r1 9 drop" in exported.script and "route r1 default via (2,2)" in exported.script
+    assert not exported.limitations

@@ -385,17 +385,32 @@ for static. Press `v` to hide or show them.
 
 ### Routing
 
-- A computer delivers directly to anything on its own network. Anything else
-  goes to its gateway.
-- Routers forward between networks, choosing the path with the fewest cable
-  hops. Two routers are neighbours when they share a network.
+- A computer delivers directly to anything on its own network (by ARP: if
+  nothing on its link answers, the send fails rather than going to the
+  gateway). Anything else goes to its gateway.
+- **Every router has a routing table**: its connected networks, the networks
+  it learned, its static routes, and a default route toward the gateways that
+  lead to the internet. A packet crosses one router at a time, and each looks
+  up the destination's network in its own table (or uses its default route).
+  No route means no delivery, however the cables run.
+- Tables come from a link-state protocol: two routers are neighbours when they
+  share a network, a cable costs one, and each router runs shortest paths
+  from itself. It converges instantly: when the topology changes, the tables
+  are rebuilt before the next packet.
+- **Static routes** override what's learned, for one network or the default
+  route: `route r1 5 via (2,2)` sends network 5 to that next hop, `route r1 5
+  drop` discards it, `route r1 5 auto` goes back to the learned route. A
+  static route whose next hop isn't on one of the router's live networks
+  isn't installed. Two routers pointing at each other make a loop, which runs
+  until the TTL expires. `routes r1` shows a table.
 - Only gateways reach `internet`.
-- **Equal-cost paths (ECMP):** when several paths are equally short, the
+- **Equal-cost paths (ECMP):** when several next hops are equally cheap, each
   router picks one by hashing the flow, meaning its source and destination.
   One conversation always takes the same path (so its packets stay in order),
-  while different conversations spread across all the equal paths. In an
-  active-active cluster, both routers share the load. The choice is stable
-  from run to run, so seeded traffic stays reproducible.
+  while different conversations spread across all the equal paths, and losing
+  a next hop moves only the flows that used it. In an active-active cluster,
+  both routers share the load. The choice is stable from run to run, so
+  seeded traffic stays reproducible.
 - Every router takes one off a packet's TTL, which starts at 64. The 64th
   router on the way drops it (time exceeded), so at most 63 routers can lie
   between two hosts.
@@ -1117,6 +1132,7 @@ them, and a group name on its own selects the group.
 | `lag`, `lag auto`, `lag <switch\|domain> <switch\|router\|gateway\|domain>`, `unlag …`, `lags` | | find and bundle aggregatable spans |
 | `mlag <group…>`, `unmlag <group>`, `mlags` | | make a group of switches act as one (needs peer links) |
 | `stp [on\|off]`, `stp <switch…> on\|off`, `stp priority <switch> <n>`, `stp cost <switch:port> <n>` | | spanning tree |
+| `routes [router…]`, `route <router> <network\|default> via (n,h)\|drop\|auto` | `rib` | routing tables and static routes |
 | `renumber [auto] bfs\|dfs [root]`, `renumber off` | `rename` | renumber ids in traversal order |
 | `layout [layered\|tree\|circular\|grid\|compact\|compact-layered] [auto\|horizontal\|vertical]`, `layout list` | `auto`, `arrange` | layout and/or flow direction, in either order; no argument reuses current settings; `list` shows choices |
 | `list` | `ls` | devices, cables, groups |
@@ -1162,8 +1178,9 @@ canvas.
 ByteSim models the behaviours above and deliberately skips the rest:
 
 - Leases never expire, and HA coordination is instant (no heartbeat timers).
-- Every router automatically knows every network it can reach; there's no
-  real routing protocol.
+- Routing converges instantly and counts cables, not link speeds. Network ids
+  aren't prefixes, so a table has exact networks and a default route (the
+  only two prefix lengths there are).
 - Routers forward multicast as if it were unicast to each receiver.
 - In split-brain, which router a host reaches is fixed by cabling order, not
   by ARP races.

@@ -92,6 +92,7 @@ devices:
 | `ports` | all | port / NIC count, 1–64 (defaults: gateway 4, router 4, switch 8, computer 1) |
 | `stp` | switches | `on` / `off` (overrides `defaults.stp`) |
 | `priority` | switches | STP bridge priority (lower wins the root election) |
+| `routes` | routers, gateways | static routes, `{network: "(net,host)"}` or `drop`; `default` for the default route |
 | `costs` | switches | STP path cost per port, `{port: cost}` (default 20000; lower is preferred toward the root) |
 | `dhcp` | routers, gateways | `off` switches the DHCP server off |
 | `interfaces` | all | address mode for every port |

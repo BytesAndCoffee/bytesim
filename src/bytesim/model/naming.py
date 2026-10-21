@@ -119,6 +119,7 @@ class NamingMixin(NetworkBase):
         self.stp_off = {ren(d) for d in self.stp_off}
         self.stp_priority = {ren(d): v for d, v in self.stp_priority.items()}
         self.stp_cost = {(ren(d), p): c for (d, p), c in self.stp_cost.items()}
+        self.static_routes = {ren(d): r for d, r in self.static_routes.items()}
         self.stp_blocked = {(ren(d), p) for d, p in self.stp_blocked}
         self.stp_roots = {ren(d): ren(r) for d, r in self.stp_roots.items()}
         self.stp_root_ports = {ren(d): p for d, p in self.stp_root_ports.items()}

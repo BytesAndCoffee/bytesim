@@ -58,6 +58,7 @@ HELP = """\
   [cyan]lag[/] (find spans) · [cyan]lag auto[/] · [cyan]lag[/] <switch|domain> <switch|router|gateway|domain> · [cyan]unlag[/] … · [cyan]lags[/]
   [cyan]mlag[/] <group…> · [cyan]unmlag[/] <group> · [cyan]mlags[/] · [cyan]demo mlag[/]   a group of switches acts as one (peer links needed), like vPC
                                     bundle parallel cables into one link (no STP blocking, flows spread)
+  [cyan]routes[/] \\[router…]  ·  [cyan]route[/] <router> <net|default> via (n,h) | drop | auto   routing tables, static routes
   [cyan]stp[/]  ·  [cyan]stp[/] on|off  ·  [cyan]stp[/] <switch…> on|off  ·  [cyan]stp priority[/] <switch> <n>  ·  [cyan]stp cost[/] <switch:port> <n>  ·  [cyan]demo loop[/]
 [b]Roles, failures, HA[/]
   [cyan]<id> <id> role=[/]data|control|control-backup|fabric   cable with a role (control = heartbeat only, ═)

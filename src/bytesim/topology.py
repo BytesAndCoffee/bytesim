@@ -41,7 +41,7 @@ from typing import Any
 
 import yaml
 
-from .constants import ALIASES, AUTO, CLUSTER_MODES, GROUP_NAME, KINDS, POLICIES, RANK, REF, ROLES
+from .constants import ADDR, ALIASES, AUTO, CLUSTER_MODES, GROUP_NAME, KINDS, POLICIES, RANK, REF, ROLES
 from .model import NetError, Network
 from .model.macros import macro_pairs
 from .model.overlay import OVERLAY_RESERVED
@@ -104,6 +104,16 @@ class _Builder:
             net.stp_off.add(dev.id)
         if "priority" in spec:
             net.stp_priority[dev.id] = int(spec["priority"])
+        if "routes" in spec:
+            routes = spec["routes"]
+            if dev.kind not in "rg" or not isinstance(routes, dict):
+                raise NetError(f"{where}.routes: static routes belong to a router, as {{network: (net,host) | drop}}")
+            for n, t in routes.items():
+                key = 0 if str(n) == "default" else int(n) if str(n).isdigit() and int(n) >= 1 else None
+                m = ADDR.match(str(t)) if str(t) != "drop" else None
+                if key is None or (str(t) != "drop" and m is None):
+                    raise NetError(f"{where}.routes: {n}: {t} — use a network id (or default) and (net,host) or drop")
+                net.static_routes.setdefault(dev.id, {})[key] = "drop" if str(t) == "drop" else (int(m[1]), int(m[2]))
         if "costs" in spec:
             costs = spec["costs"]
             if dev.kind != "s" or not isinstance(costs, dict):
@@ -534,6 +544,10 @@ def dump_topology(net: Network, pin_ports: bool = False) -> str:
                 extra["stp"] = "off" if d.id in net.stp_off else "on"
             if d.id in net.stp_priority:
                 extra["priority"] = net.stp_priority[d.id]
+            if routes := sorted(net.static_routes.get(d.id, {}).items()):
+                extra["routes"] = "{" + ", ".join(
+                    f"{'default' if n == 0 else n}: {t if t == 'drop' else repr(f'({t[0]},{t[1]})')}"
+                    for n, t in routes) + "}"
             if costs := sorted((p, c) for (s, p), c in net.stp_cost.items() if s == d.id):
                 extra["costs"] = "{" + ", ".join(f"{p}: {c}" for p, c in costs) + "}"
             if d.id in net.dhcp_off:

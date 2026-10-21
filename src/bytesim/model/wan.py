@@ -63,6 +63,14 @@ class WanMixin(NetworkBase):
             memo["public_distance"] = dist
         return dist
 
+    def advertises(self, router: str, iface: tuple[str, int], toward: str) -> bool:
+        """Does router's routing reach past it for a router arriving by iface? (NAT: see below.)"""
+        return True
+
+    def reveals(self, router: str, port: int, asker: str) -> bool:
+        """Does router advertise the network on its port to asker? (NAT: see below.)"""
+        return True
+
     def natting(self, dev_id: str) -> bool:
         return dev_id not in self.nat_off and bool(self.wan_ports(dev_id))
 

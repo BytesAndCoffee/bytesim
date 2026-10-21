@@ -3,19 +3,12 @@ from __future__ import annotations
 
 import functools
 import hashlib
-import zlib
 from collections import deque
 from contextlib import contextmanager
 
 from ..constants import MAC_AGE
 from .base import NetworkBase
 from .types import Link
-
-
-def flow_pick(options: list, flow: str, salt: object = "") -> object:
-    """Choose one of several equal options for a flow: stable across runs, the same
-    every time for the same flow, spread across different flows (CRC32, not hash())."""
-    return options[zlib.crc32(f"{flow}|{salt}".encode()) % len(options)]
 
 
 def member_pick(options: list[int], links: list, flow: str, salt: object = "") -> int:
@@ -27,6 +20,14 @@ def member_pick(options: list[int], links: list, flow: str, salt: object = "") -
         key = f"{flow}|{salt}|{l.a}:{l.pa}-{l.b}:{l.pb}".encode()
         return int.from_bytes(hashlib.blake2b(key, digest_size=8).digest(), "big")   # CRC32 is linear: scores would correlate
     return max(options, key=lambda j: (score(j), -j))
+
+
+def flow_choice(options: list, flow: str, salt: object = "") -> object:
+    """Rendezvous choice among equal options (ECMP next hops): a flow keeps its
+    choice, and losing an option moves only the flows that had chosen it."""
+    def score(o: object) -> int:
+        return int.from_bytes(hashlib.blake2b(f"{flow}|{salt}|{o!r}".encode(), digest_size=8).digest(), "big")
+    return max(options, key=score)
 
 
 def structure_memo(fn):
@@ -261,6 +262,10 @@ class Layer2Mixin(NetworkBase):
         if flow is None:
             return li if li in options else options[0]
         return member_pick(options, self.links, flow, sorted(pair))
+
+    def mlag_state_key(self) -> tuple:
+        """What MLAG's peer state depends on (see mlag_suspended)."""
+        return ()
 
     def usable(self, l: Link) -> bool:
         """Can this cable carry data? Not if it's down, a control link, an end is dead,

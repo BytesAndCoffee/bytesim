@@ -19,9 +19,11 @@ src/bytesim/
 │   ├── base.py          NetworkBase: the state + basic lookups
 │   ├── groups.py        nestable groups, frame bounds
 │   ├── cloning.py       clone_group(): devices, nested groups, internal cables
-│   ├── layer2.py        usable cables, broadcast domains, frame paths, MAC learning, graph-mode BFS
-│   ├── addressing.py    router autoconfig, DHCP, ad-hoc, reconcile()
-│   ├── routing.py       host → gateway → cheapest router path
+│   ├── layer2.py        usable cables, broadcast domains, frame paths, MAC tables (learning, aging,
+│   │                    flushes), forwarding by them, graph-mode BFS
+│   ├── addressing.py    router autoconfig, DHCP, ad-hoc, reconcile(), gratuitous ARP
+│   ├── arp.py           per-interface ARP caches: lookup, expiry, gratuitous updates
+│   ├── routing.py       routing tables (link-state SPF, static, default) and hop-by-hop forwarding
 │   ├── ha.py            clusters: partitions, policies, virtual-gateway owners
 │   ├── layout.py        layered, tree, circular, grid and compact variants
 │   ├── naming.py        BFS/DFS traversal, renumber()

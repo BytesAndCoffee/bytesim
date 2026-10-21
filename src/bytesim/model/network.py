@@ -59,6 +59,7 @@ class Network(GroupsMixin, Layer2Mixin, AddressingMixin, ArpMixin, RoutingMixin,
         self.stp_off.discard(dev.id)
         self.stp_priority.pop(dev.id, None)
         self.stp_cost = {k: v for k, v in self.stp_cost.items() if k[0] != dev.id}
+        self.static_routes.pop(dev.id, None)
         self.storming.discard(dev.id)
         self.mac_flaps.pop(dev.id, None)
         self.forget_macs({dev.id})
@@ -141,6 +142,9 @@ class Network(GroupsMixin, Layer2Mixin, AddressingMixin, ArpMixin, RoutingMixin,
             "stp_off": sorted(self.stp_off, key=lambda d: (d[0], int(d[1:]))),
             "stp_priority": self.stp_priority,
             "stp_cost": {f"{s}:{p}": c for (s, p), c in sorted(self.stp_cost.items())},
+            "static_routes": {r: {("default" if n == 0 else str(n)): (t if t == "drop" else list(t))
+                                  for n, t in sorted(routes.items())}
+                              for r, routes in sorted(self.static_routes.items())},
             "internet": self.internet,
             "nat_off": sorted(self.nat_off, key=lambda d: int(d[1:])),
             "nat_hard": sorted(self.nat_hard, key=lambda d: int(d[1:])),
@@ -184,6 +188,13 @@ class Network(GroupsMixin, Layer2Mixin, AddressingMixin, ArpMixin, RoutingMixin,
                     if len(set(p)) == 2 and set(p) <= set(net.devices) | net.mlag_domains}
         net.stp_off = set(data.get("stp_off", [])) & set(net.devices)
         net.stp_priority = {d: int(v) for d, v in data.get("stp_priority", {}).items() if d in net.devices}
+        for r, routes in data.get("static_routes", {}).items():
+            if r not in net.devices or net.devices[r].kind not in "rg":
+                continue
+            for n, t in routes.items():
+                key = 0 if n == "default" else int(n) if str(n).isdigit() else None
+                if key is not None and (t == "drop" or (isinstance(t, list) and len(t) == 2)):
+                    net.static_routes.setdefault(r, {})[key] = t if t == "drop" else (int(t[0]), int(t[1]))
         for key, c in data.get("stp_cost", {}).items():
             s, _, p = key.partition(":")
             if s in net.devices and net.devices[s].kind == "s" and p.isdigit() and 1 <= int(p) <= net.devices[s].nports:
