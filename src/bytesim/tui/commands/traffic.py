@@ -38,6 +38,7 @@ class TrafficCommands(CommandHost):
     _relay: str | None = None                     # set by _plan: the relay the last tunnel went through
     _arp_hits: list[bool] = []                    # set by _plan: which hops' ARP the cache answered
     _arp_asked: list[tuple[int, int]] = []        # set by _plan: the address each hop asked ARP for
+    _failed: tuple[str, int] | None = None         # set by _best_route: the candidate whose error it raised
     SPEEDS = {"slow": 0.5, "normal": 1.0, "fast": 3.0}
     BULK_PAIRS = 128
 
@@ -184,7 +185,7 @@ class TrafficCommands(CommandHost):
             try:
                 legs = self.net.route(src, c, port)
             except NetError as e:
-                err = e
+                err, self._failed = e, c          # the error raised is this candidate's
                 continue
             if best is None or len(self._flatten(legs)) < len(self._flatten(best)):
                 best, self._last_dst = legs, c
@@ -289,12 +290,12 @@ class TrafficCommands(CommandHost):
                     # sender has no route in (a private LAN behind NAT).
                     legs = self._nat_return(src, cands, remote, proto) if remote == "internet" else None
                     if legs is None:
-                        target = cands[0] if cands else None
+                        self._failed = cands[0] if cands else None
                         try:
                             legs = self._best_route(src, cands, port)
                         except OnLinkMiss as e:
                             # Its own network (or the last router's): it asks there by ARP.
-                            legs, _ = net.trace_route(src, target, port)
+                            legs, _ = net.trace_route(src, self._failed, port)   # the route that failed
                             hint = self.storm_hint(src, *(c[0] for c in cands or []))  # type: ignore[attr-defined]
                             unanswered, asker, no_reply, nat = e.addr, e.asker, f"{e}{hint}", flow
                         except NetError as e:
@@ -303,7 +304,7 @@ class TrafficCommands(CommandHost):
                                 why = self._nat_explain(src, cands)
                                 hint = self.storm_hint(src, *(c[0] for c in cands or []))  # type: ignore[attr-defined]
                                 # It still travels as far as the router that can't forward it.
-                                legs, _ = net.trace_route(src, target, port)
+                                legs, _ = net.trace_route(src, self._failed, port)
                                 stop, nat = (len(legs) - 1, why or f"{e}{hint}"), flow
                         else:
                             # A route in (a static one, say) doesn't get past NAT: crossing
@@ -365,12 +366,15 @@ class TrafficCommands(CommandHost):
             crossed = {net.end(d) for _, _, p in done for d, _ in p}
             for g in sorted(net.mlag_dual & crossed):
                 net.notes.append(f"⚠ crosses MLAG {g}, which is dual-active (peer link and keepalive down)")
+        # Routers it passes: every leg ends at one but the last, unless a router at
+        # the end still has to ask for the destination (then it's forwarding too).
+        routers = len(legs) - 1 + (1 if unanswered is not None and legs else 0)
+        if routers >= TTL:
+            raise NetError(f"TTL expired at {legs[TTL - 1][1][0]}, the {TTL}th router "
+                           f"(time exceeded: {routers} routers on the way)")
         if unanswered is not None:
             net.learn_flood(self._ask(asker, None, unanswered))  # type: ignore[arg-type]
             raise NetError(no_reply or f"nobody has {fmt(unanswered)} (ARP from {self._ifname(asker)} got no reply)")  # type: ignore[arg-type]
-        if len(legs) - 1 >= TTL:
-            raise NetError(f"TTL expired at {legs[TTL - 1][1][0]}, the {TTL}th router "
-                           f"(time exceeded: {len(legs) - 1} routers on the way)")
         return done
 
     def _ask(self, a: tuple[str, int], b: tuple[str, int] | None, addr: tuple[int, int]):

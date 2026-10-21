@@ -1036,3 +1036,28 @@ def test_switches_without_stp_hear_no_topology_change():
     r.run("stp off")
     net.reconcile()                                         # no STP left to send a TCN
     assert net.mac_tables == tables
+
+
+def test_an_on_link_miss_asks_from_the_router_its_own_route_reached():
+    """c2 has two interfaces off their links: one on r1's network, one on r2's. The send
+    the error comes from is the one traced and asked for: no ARP from a router it skipped."""
+    net = build(["c", ("r", 3), ("r", 3), "s", ("c", 2)], [("c1", "r1"), ("r1", "r2"), ("r2", "s1")])
+    r = ScriptRunner(net)
+    n1, n2 = net.addr_of(("r1", 2))[0], net.addr_of(("r2", 2))[0]
+    r.run(f"ip c2:1 ({n1},50)\nip c2:2 ({n2},50)")
+    floods = counting_floods(net)
+    with pytest.raises(NetError, match="ARP got no reply"):
+        r.run("unicast c1 c2")
+    assert [d for d, _ in floods] == ["c1", "r1", "r2"]     # each router asks only once it has it
+
+
+def test_ttl_runs_out_before_the_last_routers_arp():
+    net = build(["c"] + ["r"] * 64 + ["s", "c"], [("c1", "r1")] + [(f"r{i}", f"r{i + 1}") for i in range(1, 64)]
+                + [("r64", "s1")])
+    r = ScriptRunner(net)
+    last = net.addr_of(("r64", 2))[0]
+    r.run(f"ip c2 ({last},50)")
+    floods = counting_floods(net)
+    with pytest.raises(NetError, match="TTL expired at r64"):
+        r.run("unicast c1 c2")
+    assert ("r64", 2) not in floods
