@@ -595,3 +595,39 @@ def test_yaml_rejects_overlay_names_the_command_reserves(name):
     with pytest.raises(NetError, match=f"overlays.{name}: '{name}' is a word the overlay command uses"):
         load_topology("schema: bytesim/topology-v1\ndevices: {c1: 1}\n"
                       f"overlays: {{'{name}': {{members: [c1]}}}}\n")
+
+
+def _replies(r):
+    """Each traced reply's endpoint line, ECHO REPLY line and first note, by replier and sender."""
+    lines = text(r).splitlines()
+    out = {}
+    for i, line in enumerate(lines):
+        if m := re.match(r"TRACE REPLY (\S+) → (\S+) · endpoints (.*)", line):
+            echo = lines[i + 2]                               # after the hop-by-hop line
+            note = next(n.strip() for n in lines[i + 3:] if not n.strip().startswith("ARP"))
+            out[m[1].split("@")[0], m[2]] = (m[3], echo, note)
+    return out
+
+
+def test_mping_overlay_replies_report_their_own_tunnel_not_the_last_request():
+    r = runner()
+    r.run("trace on\nmping all all@ol")
+    got = _replies(r)
+    assert len(got) == 12
+    for (replier, sender), (ends, echo, note) in got.items():
+        here, there = r.net.ol_addr("ol", replier), r.net.ol_addr("ol", sender)
+        assert ends.endswith(f"→ {sender}:nic1 {fmt(r.net.addr_of((sender, 1)))}"), (replier, sender, ends)
+        assert echo.startswith(f"ECHO REPLY {fmt(here)} → {fmt(there)} ({replier} → {fmt(there)} {sender})")
+        assert note.startswith(f"overlay ol: {fmt(here)} {replier} ⇢ {fmt(there)} {sender}, a reply")
+        relayed = {replier, sender} == {"c3", "c5"}
+        assert note.endswith("(relayed via c8)" if relayed else "(direct)"), note
+
+
+def test_mping_replies_through_an_exit_node_report_their_own_endpoints():
+    r = runner()
+    r.run("overlay ol exit=c7\ntrace on\nmping c1 c8 c3@ol")    # c8 through the exit node, c3 tunnelled
+    got = _replies(r)
+    assert got["c3", "c1"][2].startswith("overlay ol: (100,2) c3 ⇢ (100,1) c1, a reply")
+    for d in ("c8",):
+        ends, _, note = got[d, "c1"]
+        assert ends.endswith("→ c1:nic1 (7,10)") and note == "a reply: back along the request's path to c1"
