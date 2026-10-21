@@ -8,7 +8,7 @@ from math import isfinite
 
 from rich.markup import escape
 
-from ...constants import ADDR, HOST_MAX, REF, TTL, VIP_HOST
+from ...constants import ADDR, HOST_MAX, NAT_IDLE, REF, TTL, VIP_HOST
 from ...model import Leg, NetError, fmt
 from ...model.traffic import TRAFFIC_KINDS, TrafficGenerator, drop_reason
 from ..cables import route
@@ -252,6 +252,9 @@ class TrafficCommands(CommandHost):
             done = self._hops(legs)
             return label, self._flatten(done), done, False
         unanswered = asker = None
+        nat = None          # (remote, source port): mappings to open at the NAT gateways it leaves by
+        stop = None         # (leg, why): the packet stops at the end of that leg, and why
+        net.nat_returning = {}
         with net.remembering():
             try:
                 label, cands = self._resolve_dst(tok)
@@ -287,65 +290,90 @@ class TrafficCommands(CommandHost):
                                 if (blocked := self._nat_explain(src, cands)) is not None:
                                     raise NetError(blocked) from None
                                 hint = self.storm_hint(src, *(c[0] for c in cands or []))  # type: ignore[attr-defined]
-                                raise NetError(f"{e}{hint}") from None
+                                # It still travels as far as the router that can't forward it.
+                                legs, _ = net.trace_route(src, cands[0] if cands else None, port)
+                                stop = len(legs) - 1, f"{e}{hint}"
                         else:
                             # A route in (a static one, say) doesn't get past NAT: crossing
                             # from WAN to LAN still takes a mapping.
-                            if (blocked := net.nat_block(legs)) is not None:
-                                legs = self._nat_return(src, cands, remote or src) if reply or stream else None
-                                if legs is None:
-                                    raise NetError(blocked)
+                            if (blocked := self._nat_blocked_at(legs)) is not None:
+                                back = self._nat_return(src, cands, remote or src) if reply or stream else None
+                                if back is None:
+                                    stop = blocked
+                                else:
+                                    legs = back
                             elif not reply:
-                                net.notes.extend(net.nat_open(legs, cands[0][0] if cands else "internet",
-                                                              net.ephemeral()))
+                                nat = cands[0][0] if cands else "internet", net.ephemeral()
                 if self._carried:
                     internet = carried is None
-        done = self._hops(legs, unanswered, asker)
+        done = self._hops(legs, unanswered, asker, nat, stop)
         return label, self._flatten(done), done, internet
 
+    def _nat_blocked_at(self, legs: list[Leg]) -> tuple[int, str] | None:
+        """(leg, why) if a NAT gateway drops this packet: one it reaches at the end of that
+        leg, coming in from its WAN side with nothing inside having asked for it."""
+        for i in range(len(legs) - 1):
+            if (x := self.net.nat_crossing(legs, i)) is not None and x[0] == "in":
+                return i, self.net.nat_block(legs)  # type: ignore[return-value]
+        return None
+
     def _hops(self, legs: list[Leg], unanswered: tuple[int, int] | None = None,
-              asker: tuple[str, int] | None = None) -> list[Leg]:
-        """Send a planned packet hop by hop: each hop's ARP (cached, or a broadcast that
-        may set off a storm) and frame, up to the router where the TTL runs out. With
-        ``unanswered``, the last ARP (from ``asker``) is for an address nobody has."""
+              asker: tuple[str, int] | None = None, nat: tuple[str, int] | None = None,
+              stop: tuple[int, str] | None = None) -> list[Leg]:
+        """Send a packet hop by hop, each hop's ARP (cached, or a broadcast that may set
+        off a storm) and then its frame. A router acts only once the packet has reached
+        it: it maps the flow if it's a NAT gateway the packet leaves by (``nat``: the
+        remote and source port), refreshes a mapping the packet is returning through, or
+        drops it (``stop``: after that leg, for that reason), or the TTL runs out there.
+        With ``unanswered``, the last ARP (from ``asker``) is for an address nobody has."""
         net = self.net
-        with net.remembering():
-            # Share structural indexes with routing, but leave the scope before
-            # setting off a storm (a model mutation).
-            asks: list[tuple[tuple[str, int], tuple[str, int] | None]] = [(a, b) for a, b, _ in legs[:TTL]]
-            self._arp_asked = [self._next_hop_addr(legs, i) for i in range(len(asks))]
-            if unanswered is not None:
-                asks.append((asker, None))  # type: ignore[arg-type]
-            floods, storm = [], None
-            for (a, b), addr in zip(asks, self._arp_asked + [unanswered]):
-                if b is not None and (cached := net.arp_lookup(a, addr)) is not None:
-                    if cached != b and addr[1] == VIP_HOST:
-                        net.arp_store(a, addr, b)   # the virtual gateway's new owner announced itself
-                    floods.append(None)                # a cache hit: no ARP
-                    continue
-                fl = net.flood(a)
-                if fl.storm:
-                    storm = a, b, fl
-                    break
-                floods.append(fl)
-            self._arp_hits = [fl is None for fl in floods]
-        if storm is not None:
-            a, b, fl = storm
-            what = fmt(net.addr_of(b) if b else unanswered)
-            self.set_off_storm(fl, f"the ARP for {what} from {self._ifname(a)}")  # type: ignore[attr-defined]
-            raise NetError(f"{self._ifname(a)} never got an ARP reply: its broadcast set off a storm")
-        done = self._exchange(legs[:TTL], floods, self._arp_asked)
+        if stop is not None and stop[0] < 0:
+            raise NetError(stop[1])                    # it never left the sender
+        self._arp_asked = [self._next_hop_addr(legs, i) for i in range(min(len(legs), TTL))]
+        self._arp_hits = []
+        done: list[Leg] = []
+        source = (net.addr_of(legs[0][0]), nat[1]) if nat and legs else None
+        for i, (a, b, p) in enumerate(legs[:TTL]):
+            addr = self._arp_asked[i]
+            fl = self._ask(a, b, addr)
+            self._arp_hits.append(fl is None)
+            done += self._exchange([(a, b, p)], [fl], [addr])
+            if stop is not None and stop[0] == i:
+                raise NetError(stop[1])
+            if i + 1 >= len(legs) or i + 1 >= TTL:
+                continue                               # delivered, or the TTL runs out at b
+            r = b[0]
+            if nat and net.nat_crossing(legs, i) == ("out", r):
+                source, note = net.nat_map(r, legs[i + 1][0][1], source, nat[0])  # type: ignore[arg-type]
+                net.notes.append(note)
+            if (m := net.nat_returning.get(r)) is not None:
+                m["expires"] = net.clock + NAT_IDLE
         if net.mlag_dual:
             crossed = {net.end(d) for _, _, p in done for d, _ in p}
             for g in sorted(net.mlag_dual & crossed):
                 net.notes.append(f"⚠ crosses MLAG {g}, which is dual-active (peer link and keepalive down)")
         if unanswered is not None:
-            net.learn_flood(floods[-1])
+            net.learn_flood(self._ask(asker, None, unanswered))  # type: ignore[arg-type]
             raise NetError(f"nobody has {fmt(unanswered)} (ARP from {self._ifname(asker)} got no reply)")  # type: ignore[arg-type]
         if len(legs) - 1 >= TTL:
             raise NetError(f"TTL expired at {legs[TTL - 1][1][0]}, the {TTL}th router "
                            f"(time exceeded: {len(legs) - 1} routers on the way)")
         return done
+
+    def _ask(self, a: tuple[str, int], b: tuple[str, int] | None, addr: tuple[int, int]):
+        """a's ARP for addr: None if its cache answers, else the broadcast (or a storm)."""
+        net = self.net
+        with net.remembering():
+            # Share structural indexes, but leave the scope before setting off a storm.
+            if b is not None and (cached := net.arp_lookup(a, addr)) is not None:
+                if cached != b and addr[1] == VIP_HOST:
+                    net.arp_store(a, addr, b)   # the virtual gateway's new owner announced itself
+                return None
+            fl = net.flood(a)
+        if fl.storm:
+            self.set_off_storm(fl, f"the ARP for {fmt(addr)} from {self._ifname(a)}")  # type: ignore[attr-defined]
+            raise NetError(f"{self._ifname(a)} never got an ARP reply: its broadcast set off a storm")
+        return fl
 
     def _nat_return(self, src: str, cands: list[tuple[str, int]] | None, remote: str) -> list[Leg] | None:
         """Traffic back to an inside host on a flow it started: through the NAT mappings."""
@@ -527,8 +555,9 @@ class TrafficCommands(CommandHost):
 
     @command("traceroute", "tracert")
     def cmd_traceroute(self, args: list[str], opts: dict[str, str]) -> None:
-        """Probes with TTL 1, 2, 3…: each router where one runs out answers "time
-        exceeded" (its reply routed back on its own), then the destination answers."""
+        """Probes with TTL 1, 2, 3…, each forwarded on its own: the router where one
+        runs out answers "time exceeded" (that answer routed back on its own), the
+        destination answers the last. A router that can't forward a probe ends it."""
         if len(args) != 2:
             raise NetError("usage: traceroute <src> <id|(net,host)|internet>")
         if self.graph:
@@ -536,37 +565,61 @@ class TrafficCommands(CommandHost):
             self.cmd_ping(args, opts)
             return
         src, port = self._src(args[0])
+        net = self.net
+        if self._overlay_dst(args[1]) is not None:
+            raise NetError("traceroute follows real addresses: trace a member's real address, "
+                           "or ping its overlay address")
+        net.notes.clear()
+        self._overlay_src, self._carried, self._relay = None, False, None
         try:
-            label, path, legs, internet = self._plan(src, args[1], port=port)
+            with net.remembering():
+                label, cands = self._resolve_dst(args[1])
         except NetError as e:
             raise NetError(f"traceroute {src} → {args[1]}: {e}") from None
-        if not legs:
-            self.log_msg(f"{src}: {label} is itself")
-            return
-        net = self.net
-        back_to = fmt(net.addr_of(legs[0][0]))
-        remote = "internet" if internet else legs[-1][1][0]
-        hops = [b for _, b, _ in legs]                 # every router, then the destination
-        self.log_msg(f"[b]TRACEROUTE[/] {fmt(net.addr_of(legs[0][0]))} ({src}) → {label}, "
-                     f"{len(hops)} hop{'s' if len(hops) != 1 else ''}, max {self.TRACE_HOPS}")
-        so_far = 0.0
-        for k, (b, (_, _, p)) in enumerate(zip(hops, legs), 1):
-            if k > self.TRACE_HOPS:
-                self.log_msg(f"  [dim]… stopped at {self.TRACE_HOPS} hops[/]")
+        # Every probe of the flow takes the same way: route it once, as far as it goes.
+        best: tuple[list[Leg], NetError | None, tuple[str, int] | None] | None = None
+        for c in cands if cands is not None else [None]:
+            legs, err = net.trace_route(src, c, port)
+            if err is None or best is None or len(legs) > len(best[0]):
+                best = legs, err, c
+            if err is None:
                 break
-            so_far += sum(random.uniform(0.15, 0.6) for _ in p)
-            last = k == len(hops) and not internet
+        legs, err, target = best  # type: ignore[misc]
+        why = str(err) if err is not None else None
+        if why is None and (blocked := self._nat_blocked_at(legs)) is not None:
+            legs, why = legs[:blocked[0] + 1], blocked[1]
+        if not legs:
+            raise NetError(f"traceroute {src} → {args[1]}: {why}")
+        internet = cands is None
+        remote = "internet" if internet else target[0]  # type: ignore[index]
+        back_to = fmt(net.addr_of(legs[0][0]))
+        sport = net.ephemeral()
+        self.log_msg(f"[b]TRACEROUTE[/] {back_to} ({src}) → {label}, max {self.TRACE_HOPS} hops")
+        reached = min(len(legs), self.TRACE_HOPS)
+        for k in range(1, reached + 1):
+            b = legs[k - 1][1]
+            last = k == len(legs) and why is None and not internet
+            net.notes.clear()
+            try:
+                probe = self._hops(legs[:k], nat=(remote, sport))   # TTL k: it runs out at b
+            except NetError as e:
+                self.log_msg(f"  {k:>2}  *  [dim](the probe was lost: {escape(str(e))})[/]")
+                continue
             what = "echo reply" if last else "time exceeded"
             try:
                 _, back, _, _ = self._plan(b[0], back_to, reply=True, remote=remote)
             except NetError as e:
                 self.log_msg(f"  {k:>2}  *  [dim]({b[0]}'s {what} can't get back: {escape(str(e))})[/]")
                 continue
-            rtt = so_far + sum(random.uniform(0.15, 0.6) for _ in back)
-            self.log_msg(f"  {k:>2}  {b[0]} {fmt(net.addr_of(b))}  {rtt:.2f} ms" + ("" if not last else "  [green](reached)[/]"))
-        if internet:
+            rtt = sum(random.uniform(0.15, 0.6) for _ in self._flatten(probe) + back)
+            self.log_msg(f"  {k:>2}  {b[0]} {fmt(net.addr_of(b))}  {rtt:.2f} ms" + ("  [green](reached)[/]" if last else ""))
+        if len(legs) > self.TRACE_HOPS:
+            self.log_msg(f"  [dim]… stopped at {self.TRACE_HOPS} hops[/]")
+        elif why is not None:
+            self.log_msg(f"  {len(legs) + 1:>2}  *  [dim]({legs[-1][1][0]} can't forward it: {escape(why)})[/]")
+        elif internet:
             self.log_msg("  [dim]… then the internet (beyond what ByteSim models)[/]")
-        self.canvas.send_packet(self._cells(path), "red", None)
+        self.canvas.send_packet(self._cells(self._flatten(legs[:reached])), "red", None)
 
     @command("ping")
     def cmd_ping(self, args: list[str], opts: dict[str, str]) -> None:

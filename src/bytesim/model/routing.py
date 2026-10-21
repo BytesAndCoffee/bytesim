@@ -36,15 +36,26 @@ class RoutingMixin(NetworkBase):
     _rib: tuple | None = None   # (routing state, router graph, {router: table}); rebuilt when the state moves
 
     @route_query
+    def trace_route(self, src: str, dst: tuple[str, int] | None,
+                    port: int | None = None) -> tuple[list[Leg], NetError | None]:
+        """Forward as far as the packet gets: (the legs it crossed, why it stopped or None).
+        A router that can't forward it ends the list."""
+        into: list[Leg] = []
+        try:
+            return self.route(src, dst, port, into=into), None
+        except NetError as e:
+            return into, e
+
     def route(self, src: str, dst: tuple[str, int] | None, port: int | None = None,
-              nat: bool = True) -> list[Leg]:
+              nat: bool = True, into: list[Leg] | None = None) -> list[Leg]:
         """Path from a device to an interface (or to the internet if dst is None).
 
         Each leg is one layer-2 hop between addressed interfaces. A host delivers
         directly on its own network, otherwise via its gateway; routers forward by
         their tables. A ``port`` binds a computer's packet to that interface (like
         ``ping -I``). ``nat=False`` routes as if NAT gateways advertised their LANs:
-        the path a packet takes once a mapping (or a punched hole) lets it in.
+        the path a packet takes once a mapping (or a punched hole) lets it in. ``into``
+        collects the legs as they're found, so a caller sees how far a failure got.
 
         Where several next hops are equally cheap, the flow (source and destination)
         picks one at each router: the same flow always takes the same path, different
@@ -63,7 +74,7 @@ class RoutingMixin(NetworkBase):
         dst_addr = self.addr_of(dst) if dst else None
         flow = f"{src}>{dst[0] if dst else 'internet'}"
         if dev.kind in "rg":
-            return self._router_route(src, dst, dst_addr, flow, nat)
+            return self._router_route(src, dst, dst_addr, flow, nat, into)
         nics = self.addressed(src)
         if port is not None:
             nics = [(p, ifc) for p, ifc in nics if p == self.lag_primary(src, port)]
@@ -75,7 +86,10 @@ class RoutingMixin(NetworkBase):
             on_link = [p for p, ifc in nics if ifc.net == dst_addr[0]]
             for p in on_link:
                 if dst in self.segment(src, p):
-                    return [((src, p), dst, self.l2path((src, p), dst, flow))]
+                    leg = ((src, p), dst, self.l2path((src, p), dst, flow))
+                    if into is not None:
+                        into[:] = [leg]
+                    return [leg]
             if on_link:                     # its own network: it asks by ARP, never its gateway
                 raise NetError(f"{fmt(dst_addr)} is on {src}'s own network {dst_addr[0]}, but nothing on "
                                f"{src}:{dev.port_name(on_link[0])}'s link has it (ARP got no reply)")
@@ -104,9 +118,11 @@ class RoutingMixin(NetworkBase):
                 problems.append(f"gateway {fmt((ifc.net, ifc.gw))} is {gw[0]}, an active-passive "
                                 f"standby: it doesn't forward")
                 continue
+            first = ((src, p), gw, self.l2path((src, p), gw, flow))
+            if into is not None:
+                into[:] = [first]
             try:
-                return ([((src, p), gw, self.l2path((src, p), gw, flow))]
-                        + self._router_route(gw[0], dst, dst_addr, flow, nat))
+                return [first] + self._router_route(gw[0], dst, dst_addr, flow, nat, into)
             except NetError as e:
                 problems.append(str(e))
         if problems:
@@ -116,7 +132,8 @@ class RoutingMixin(NetworkBase):
         raise NetError(f"{where} isn't local to {who} and {who} has no gateway")
 
     def _router_route(self, start: str, dst: tuple[str, int] | None,
-                      dst_addr: tuple[int, int] | None, flow: str = "", nat: bool = True) -> list[Leg]:
+                      dst_addr: tuple[int, int] | None, flow: str = "", nat: bool = True,
+                      into: list[Leg] | None = None) -> list[Leg]:
         """Forward from a router, one table lookup per router, to dst (or out to the
         internet). A routing loop (from static routes) runs until the TTL would expire."""
         legs: list[Leg] = []
@@ -139,6 +156,8 @@ class RoutingMixin(NetworkBase):
                         path = self.l2path((u, p), dst, flow)
                         if path is not None:
                             legs.append(((u, p), dst, path))
+                            if into is not None:
+                                into.append(legs[-1])
                             return legs
                 if here:
                     raise NetError(f"{fmt(dst_addr)} is on {u}'s network {net}, but nothing on "
@@ -154,6 +173,8 @@ class RoutingMixin(NetworkBase):
             if path is None:
                 raise NetError(f"{u}'s next hop {fmt(self.addr_of(e))} is unreachable")  # type: ignore[attr-defined]
             legs.append((a, e, path))
+            if into is not None:
+                into.append(legs[-1])
             u = e[0]
         return legs                                     # looping: the TTL runs out on the way
 

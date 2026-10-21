@@ -487,9 +487,15 @@ overlay retrace the request's tunnel. The reported TTL is the reply's. A
 receiver that fails (or is deleted) while the request is on its way never
 answers.
 
-`traceroute` sends probes with TTL 1, 2, 3…: the router where each runs out
-answers `time exceeded` from the address the probe came in on, and that answer
-is routed back on its own, so a router with no way back shows `*`.
+`traceroute` sends probes with TTL 1, 2, 3… (up to 30), each forwarded on its
+own: the router where one runs out answers `time exceeded` from the address the
+probe came in on, and that answer is routed back on its own, so a router with
+no way back shows `*`. A router that can't forward the probes (no route, a
+drop route, a NAT) ends the list with `*`, after the hops before it.
+
+Packets act on the network only as far as they get. A frame lost on its first
+hop never reaches the router, so that router opens no NAT mapping and sends no
+ARP of its own.
 
 Detailed sends log the address path, an ARP line for every hop (`ARP (3,1) is-at
 R1C`) and the TTL. Multicast also reports where copies were made and how many
@@ -973,7 +979,9 @@ A gateway with a WAN port runs **NAT**, and keeps a table of mappings:
 - **Coming back:** replies, and unicast the remote sends back on the flow (as
   UDP does), are addressed to the public port and translated through the
   mapping, so they reach the host that started the flow. A new echo request
-  from outside is a new flow, not a reply, so it doesn't get in. A mapping lasts 60 seconds
+  from outside is a new flow, not a reply, so it doesn't get in. A gateway
+  never gives a public port that a live mapping holds to another flow, and
+  says so when all of 40000–65535 are taken. A mapping lasts 60 seconds
   after its last packet (`wait 61` and it's gone), and a gateway that fails
   loses its mappings.
 - **Coming in uninvited:** the gateway doesn't advertise its LAN to the
@@ -1240,8 +1248,8 @@ ByteSim models the behaviours above and deliberately skips the rest:
 - Routers forward multicast as if it were unicast to each receiver.
 - In split-brain, which router a host reaches is fixed by cabling order, not
   by ARP races.
-- STP converges instantly, and every hop's ARP is a fresh broadcast (there's no
-  ARP cache).
+- STP converges instantly, and ARP entries have one fixed lifetime (no
+  reachability probing: a stale entry is dropped after the packet it lost).
 - Ping times are random. Hop counts and TTLs are real.
 - MAC tables have no size limit, and an STP change flushes a whole area at
   once rather than ageing it fast.

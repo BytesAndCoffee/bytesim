@@ -74,6 +74,9 @@ Every mechanism now gets its result for the reason a real network would.
   own address as their gateway.
 - **Source interfaces** (`ping c1:2 c3`) bind the packet to that NIC instead of
   being ignored.
+- Packets act only as far as they get: each hop's ARP, and each router's NAT
+  mapping, refresh or drop, happens once the packet reaches it, so a frame
+  lost early opens no mapping and sets off no storm beyond it.
 
 ## 0.3.2 (2026-10-20)
 

@@ -87,33 +87,50 @@ class WanMixin(NetworkBase):
         self._ports += 1
         return 49152 + (self._ports - 1) % 16384
 
-    def nat_open(self, legs: list[Leg], remote: str, sport: int) -> list[str]:
-        """An outbound packet: map it at every NAT gateway it leaves through (a second NAT
-        maps what the first produced). Returns the translations, for the console."""
-        notes = []
-        source = (self.addr_of(legs[0][0]), sport) if legs else None  # type: ignore[attr-defined]
-        for (_, (r, p_in), _), ((_, p_out), _, _) in zip(legs, legs[1:]):
-            if not self.natting(r):
-                continue
-            wan = self.wan_ports(r)
-            if p_in in wan or p_out not in wan:
-                continue
-            public = self.addr_of((r, p_out))  # type: ignore[attr-defined]
-            maps = self.nat_table.setdefault(r, [])
-            hard = r in self.nat_hard
-            same = [m for m in maps if m["inside"] == source and (not hard or m["remote"] == remote)]
-            pport = same[0]["public"][1] if same else 40000 + len({m["public"][1] for m in maps})
-            for m in same:
-                if m["remote"] == remote:
-                    m["expires"] = self.clock + NAT_IDLE
-                    break
-            else:
-                maps.append({"inside": source, "public": (public, pport), "remote": remote,
-                             "expires": self.clock + NAT_IDLE})
-            notes.append(f"NAT at {r}: {fmt(source[0])}:{source[1]} leaves as {fmt(public)}:{pport} "
-                         f"(its WAN address; {'hard' if hard else 'easy'} NAT)")
-            source = (public, pport)
-        return notes
+    NAT_PORTS = range(40000, 65536)
+
+    def nat_crossing(self, legs: list[Leg], i: int) -> tuple[str, str] | None:
+        """At the router between legs i and i+1: ("out", r) leaving a NAT gateway's LAN for
+        its WAN, ("in", r) the other way, or None."""
+        if i + 1 >= len(legs):
+            return None
+        (_, (r, p_in), _), ((_, p_out), _, _) = legs[i], legs[i + 1]
+        if not self.natting(r):
+            return None
+        wan = self.wan_ports(r)
+        if p_in not in wan and p_out in wan:
+            return "out", r
+        if p_in in wan and p_out not in wan:
+            return "in", r
+        return None
+
+    def nat_map(self, r: str, p_out: int, source: tuple[tuple[int, int], int],
+                remote: str) -> tuple[tuple[tuple[int, int], int], str]:
+        """A packet leaving NAT gateway r by its WAN port p_out: map its source (address,
+        port) to a public endpoint that no other live flow holds. Returns the translated
+        source and what to say about it."""
+        public = self.addr_of((r, p_out))  # type: ignore[attr-defined]
+        maps = self.nat_table.setdefault(r, [])
+        maps[:] = [m for m in maps if m["expires"] > self.clock]
+        hard = r in self.nat_hard
+        same = [m for m in maps if m["inside"] == source and (not hard or m["remote"] == remote)]
+        if same:
+            pport = same[0]["public"][1]
+        else:
+            used = {m["public"][1] for m in maps}
+            pport = next((p for p in self.NAT_PORTS if p not in used), None)
+            if pport is None:
+                raise NetError(f"{r}'s NAT is out of public ports: all {len(self.NAT_PORTS)} are in use")
+        for m in same:
+            if m["remote"] == remote:
+                m["expires"] = self.clock + NAT_IDLE
+                break
+        else:
+            maps.append({"inside": source, "public": (public, pport), "remote": remote,
+                         "expires": self.clock + NAT_IDLE})
+        note = (f"NAT at {r}: {fmt(source[0])}:{source[1]} leaves as {fmt(public)}:{pport} "
+                f"(its WAN address; {'hard' if hard else 'easy'} NAT)")
+        return (public, pport), note
 
     def nat_chain(self, remote: str, inside: tuple[int, int]) -> list[tuple[str, dict]]:
         """The live mappings that carry remote's traffic back to an inside address,
@@ -133,10 +150,13 @@ class WanMixin(NetworkBase):
 
     def nat_return(self, src: str, remote: str, inside: tuple[str, int]) -> tuple[list[Leg], list[str]] | None:
         """src sending back on a flow the inside started: to the outermost gateway's public
-        endpoint, translated inward one gateway at a time. None without live mappings."""
+        endpoint, translated inward one gateway at a time. None without live mappings.
+        ``nat_returning`` holds the mappings used, for each gateway to refresh when the
+        packet reaches it."""
         chain = self.nat_chain(remote, self.addr_of(inside))  # type: ignore[attr-defined]
         if not chain:
             return None
+        self.nat_returning = dict(chain)
         legs: list[Leg] = []
         notes = []
         outer_g, outer_m = chain[-1]
@@ -149,7 +169,6 @@ class WanMixin(NetworkBase):
             target = self.resolve(chain[i - 1][1]["public"][0]) if i else inside  # type: ignore[attr-defined]
             if target is None:
                 return None
-            m["expires"] = self.clock + NAT_IDLE
             notes.append(f"NAT at {g}: {fmt(m['public'][0])}:{m['public'][1]} → "
                          f"{fmt(m['inside'][0])}:{m['inside'][1]} (the mapping {fmt(m['inside'][0])}'s flow made)")
             legs += self.route(g, target)  # type: ignore[attr-defined]
@@ -178,6 +197,8 @@ class WanMixin(NetworkBase):
 
     def natting(self, dev_id: str) -> bool:
         return dev_id not in self.nat_off and bool(self.wan_ports(dev_id))
+
+    nat_returning: dict[str, dict] = {}
 
     def nat_block(self, legs: list[Leg]) -> str | None:
         """Why NAT drops this (unsolicited) packet, or None if it gets through.

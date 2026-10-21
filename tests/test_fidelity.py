@@ -797,7 +797,7 @@ def test_traceroute_lists_each_router_then_the_destination():
     text = plain(r)
     for k, hop in enumerate(["r1 (1,1)", "r2 (2,2)", "r3 (3,2)", "c2 (4,10)"], 1):
         assert f"  {k}  {hop}" in text
-    assert "(reached)" in text and "4 hops" in text
+    assert "(reached)" in text and "max 30 hops" in text
 
 
 def test_a_router_whose_answer_cant_get_back_shows_a_star():
@@ -868,3 +868,80 @@ def test_a_connected_network_beats_a_static_route():
     assert net.routing_table("r1")[c2net].kind == "connected"
     r.run("ping c1 c2")
     assert "  reply from c2" in plain(r)
+
+
+
+# ---- second review: effects only where the packet got, free NAT ports, real probes ----------
+
+def natnet():
+    """g1 (NAT) with c1-c4 on s1, its WAN to g2, and the public c5 behind g2."""
+    net = build([("g", 3), ("g", 3), ("s", 8), "c", "c", "c", "c", "c"],
+                [("g1", "s1"), ("g1", "g2"), ("g2", "c5")] + [(f"c{i}", "s1") for i in range(1, 5)])
+    net.group_add("public", ["g2", "c5"])
+    net.internet = "public"
+    net.reconcile()
+    return net, ScriptRunner(net, detail=True)
+
+
+def test_a_packet_lost_before_the_nat_gateway_opens_no_mapping():
+    net, r = natnet()
+    r.run("unicast c1 g1")                                      # c1 caches g1's MAC
+    net.learn_mac("s1", net.devices["g1"].mac(1), 3)             # s1 now sends it to c2's port
+    with pytest.raises(NetError, match="reached c2 instead"):
+        r.run("unicast c1 c5")
+    assert not net.nat_table
+    with pytest.raises(NetError, match="unsolicited inbound"):
+        r.run("unicast c5 c1")
+
+
+def test_a_packet_lost_before_a_router_sets_off_nothing_beyond_it():
+    net = build([("s", 5)] * 4 + [("r", 3), "c", "c", "c"],
+                [("c1", "s1"), ("r1", "s1"), ("c3", "s1"), ("r1", "s2"),
+                 ("s2", "s3"), ("s3", "s4"), ("s4", "s2"), ("c2", "s3")])
+    r = ScriptRunner(net)
+    r.run("unicast c1 r1:1")
+    net.stp_off = {"s2", "s3", "s4"}
+    net.reconcile()
+    net.storming.clear()
+    net.arp_store(("c1", 1), net.addr_of(("r1", 1)), ("r1", 1))
+    net.learn_mac("s1", "R1A", 3)                                # the first hop can't reach r1
+    with pytest.raises(NetError):
+        r.run("unicast c1 c2")
+    assert not net.storming                                      # r1 never got it, so never ARPed
+
+
+def test_nat_never_hands_out_a_public_port_a_live_flow_holds():
+    net, r = natnet()
+    for i in (1, 2, 3):
+        r.run(f"unicast c{i} c5")
+        if i < 3:
+            r.run("wait 10")
+    r.run("wait 45")                                             # only c1's mapping (40000) expires
+    r.run("unicast c4 c5")
+    live = [m for m in net.nat_table["g1"] if m["expires"] > net.clock]
+    assert len({m["public"] for m in live}) == len(live) == 3
+    assert {m["public"][1] for m in live} == {40000, 40001, 40002}  # the freed port, not a held one
+
+
+def test_nat_ports_can_run_out():
+    net, r = natnet()
+    net.nat_table["g1"] = [{"inside": ((9, i), 1), "public": (net.addr_of(("g1", 2)), p), "remote": "c5",
+                            "expires": 1e9} for i, p in enumerate(net.NAT_PORTS)]
+    with pytest.raises(NetError, match="g1's NAT is out of public ports"):
+        r.run("unicast c1 c5")
+
+
+def test_traceroute_shows_the_hops_before_a_router_that_drops():
+    r = chain(3)
+    net4 = r.net.addr_of(("c2", 1))[0]
+    r.run(f"route r2 {net4} drop\ntraceroute c1 c2")
+    text = plain(r)
+    assert "TRACEROUTE" in text and "   1  r1 (1,1)" in text and "   2  r2 (2,2)" in text
+    assert f"   3  *  (r2 can't forward it: r2 drops traffic for network {net4}" in text
+
+
+def test_traceroute_shows_30_hops_of_a_path_longer_than_a_ping_can_go():
+    r = chain(65)
+    r.run("traceroute c1 c2")
+    text = plain(r)
+    assert sum(" ms" in line for line in text.splitlines()) == 30 and "stopped at 30 hops" in text

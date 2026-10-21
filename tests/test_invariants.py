@@ -2,8 +2,9 @@
 trace, whatever failed, recovered or aged out before it was sent.
 
 Each case loads a demo, then repeatedly fails or restores a random device or cable (or
-lets time pass) and reconciles, as the app does, then plans random traffic. Whatever
-gets delivered is checked against invariants that don't trust the path search: live
+lets time pass) and reconciles, as the app does, then plans random traffic. No send,
+delivered or not, may leave one public NAT endpoint mapped to two flows, or open a
+mapping at a gateway its route never reached. Whatever gets delivered is checked against invariants that don't trust the path search: live
 devices and cables, physical continuity, switch-only transit inside a hop, the MAC
 tables that hop taught, one network per hop, each router's own table choosing the next
 hop, the TTL, and NAT mappings for anything that comes in from a WAN.
@@ -66,6 +67,16 @@ def check_route(net, legs, dst_iface, internet):
             assert live, f"WAN→LAN through {r}'s NAT to {inside} without a live mapping"
 
 
+def check_nat_endpoints(net):
+    """No gateway maps one live public endpoint to two inside flows."""
+    for g, maps in net.nat_table.items():
+        held: dict = {}
+        for m in maps:
+            if m["expires"] > net.clock:
+                held.setdefault(m["public"], set()).add(m["inside"])
+        assert all(len(v) == 1 for v in held.values()), f"{g} maps one public endpoint to several flows: {held}"
+
+
 def step(net, r, rng):
     roll = rng.random()
     if roll < 0.15:
@@ -97,10 +108,17 @@ def test_every_delivered_packet_has_a_valid_trace(demo, seed):
         for _ in range(4):
             src = rng.choice(hosts)
             dst = rng.choice([h for h in hosts if h != src] + ["internet"])
+            before = {g: len(maps) for g, maps in net.nat_table.items()}
             try:
                 _, _, legs, internet = r._plan(src, dst)
             except NetError:
-                continue                                 # not delivered: nothing to vouch for
+                check_nat_endpoints(net)
+                target = None if dst == "internet" else (dst, 1)
+                reached = {b[0] for _, b, _ in net.trace_route(src, target)[0]}    # as far as routing goes
+                grew = {g for g, maps in net.nat_table.items() if len(maps) > before.get(g, 0)}
+                assert grew <= reached, f"a failed send opened NAT mappings at {grew - reached}, never reached"
+                continue                                 # not delivered: nothing more to vouch for
+            check_nat_endpoints(net)
             if not legs:
                 continue
             for a, b, path in legs:
