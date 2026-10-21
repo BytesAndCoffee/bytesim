@@ -23,6 +23,15 @@ from .types import Leg, NetError, fmt
 DEFAULT = 0          # the default route's key in a table (network ids start at 1)
 
 
+class OnLinkMiss(NetError):
+    """The destination is on the sender's own network, but not on its link: the sender
+    (``asker``) asks by ARP there for ``addr``, and nobody answers."""
+
+    def __init__(self, message: str, asker: tuple[str, int], addr: tuple[int, int]) -> None:
+        super().__init__(message)
+        self.asker, self.addr = asker, addr
+
+
 @dataclass
 class Route:
     kind: str                   # connected, learned, static, drop (static blackhole), default, exit
@@ -91,9 +100,12 @@ class RoutingMixin(NetworkBase):
                         into[:] = [leg]
                     return [leg]
             if on_link:                     # its own network: it asks by ARP, never its gateway
-                raise NetError(f"{fmt(dst_addr)} is on {src}'s own network {dst_addr[0]}, but nothing on "
-                               f"{src}:{dev.port_name(on_link[0])}'s link has it (ARP got no reply)")
-        problems = []
+                if into is not None:
+                    into[:] = []
+                raise OnLinkMiss(f"{fmt(dst_addr)} is on {src}'s own network {dst_addr[0]}, but nothing on "
+                                 f"{src}:{dev.port_name(on_link[0])}'s link has it (ARP got no reply)",
+                                 (src, on_link[0]), dst_addr)
+        problems: list = []
         for p, ifc in nics:
             if ifc.gw is None:
                 continue
@@ -112,11 +124,11 @@ class RoutingMixin(NetworkBase):
             else:
                 gw = next((e for e in seg if self.addr_of(e) == (ifc.net, ifc.gw)), None)
             if gw is None:
-                problems.append(f"gateway {fmt((ifc.net, ifc.gw))} unreachable from {src}:{dev.port_name(p)}")
+                problems.append(NetError(f"gateway {fmt((ifc.net, ifc.gw))} unreachable from {src}:{dev.port_name(p)}"))
                 continue
             if gw[0] in self.standby_routers() and not (dst is not None and dst[0] == gw[0]):  # type: ignore[attr-defined]
-                problems.append(f"gateway {fmt((ifc.net, ifc.gw))} is {gw[0]}, an active-passive "
-                                f"standby: it doesn't forward")
+                problems.append(NetError(f"gateway {fmt((ifc.net, ifc.gw))} is {gw[0]}, an active-passive "
+                                         f"standby: it doesn't forward"))
                 continue
             first = ((src, p), gw, self.l2path((src, p), gw, flow))
             if into is not None:
@@ -124,9 +136,11 @@ class RoutingMixin(NetworkBase):
             try:
                 return [first] + self._router_route(gw[0], dst, dst_addr, flow, nat, into)
             except NetError as e:
-                problems.append(str(e))
+                problems.append(e)
+        if len(problems) == 1:
+            raise problems[0]                # keep its kind (an on-link miss carries who asks)
         if problems:
-            raise NetError("; ".join(problems))
+            raise NetError("; ".join(str(e) for e in problems))
         where = f"network {dst_addr[0]}" if dst_addr else "the internet"
         who = src if port is None else f"{src}:{dev.port_name(port)}"
         raise NetError(f"{where} isn't local to {who} and {who} has no gateway")
@@ -160,8 +174,9 @@ class RoutingMixin(NetworkBase):
                                 into.append(legs[-1])
                             return legs
                 if here:
-                    raise NetError(f"{fmt(dst_addr)} is on {u}'s network {net}, but nothing on "
-                                   f"{u}:{self.devices[u].port_name(here[0])}'s link has it (ARP got no reply)")
+                    raise OnLinkMiss(f"{fmt(dst_addr)} is on {u}'s network {net}, but nothing on "
+                                     f"{u}:{self.devices[u].port_name(here[0])}'s link has it (ARP got no reply)",
+                                     (u, here[0]), dst_addr)
                 route = table.get(net) or table.get(DEFAULT)
                 if route is None or route.kind == "exit":
                     raise NetError(f"no route to network {net} from {u}")

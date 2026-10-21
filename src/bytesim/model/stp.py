@@ -270,7 +270,7 @@ class SpanningTreeMixin(NetworkBase):
     def stp_update(self) -> list[str]:
         """Re-run STP and end storms whose loop is gone. Returns notes on what changed."""
         notes = self.mlag_update()  # type: ignore[attr-defined]
-        before = self.stp_blocked
+        before, roots_before = self.stp_blocked, self.stp_roots
         self.stp_blocked, self.stp_roots, self.stp_root_ports = self.stp_compute()
         for sw, p in sorted(before - self.stp_blocked):
             li = self.link_index(sw, p) if sw in self.devices else None
@@ -278,13 +278,15 @@ class SpanningTreeMixin(NetworkBase):
                 notes.append(f"STP {sw}:p{p} blocking → forwarding")
         for sw, p in sorted(self.stp_blocked - before):
             notes.append(f"STP {sw}:p{p} → blocking")
-        # A topology change (TCN): every switch in the changed area flushes its MAC
-        # table, since what it learned may now lie the other way.
+        # A topology change (TCN): every STP switch in the changed area, as it was or
+        # is now, flushes its MAC table, since what it learned may now lie the other
+        # way. Switches with STP off never hear of it.
         changed = {sw for sw, _ in before ^ self.stp_blocked if sw in self.devices}
         if changed:
-            roots = {self.stp_roots.get(sw, sw) for sw in changed}
+            roots = {r for sw in changed for r in (roots_before.get(sw), self.stp_roots.get(sw)) if r}
             self.forget_macs({sw for sw in self.devices  # type: ignore[attr-defined]
-                              if self.devices[sw].kind == "s" and self.stp_roots.get(sw, sw) in roots} | changed)
+                              if self.devices[sw].kind == "s" and self.stp_enabled(sw)
+                              and (roots_before.get(sw) in roots or self.stp_roots.get(sw) in roots)})
         if self.storming:
             # A storm lives as long as its area still has a forwarding loop.
             looped = {d for i in self.loop_links(honor_stp=True)
@@ -304,11 +306,13 @@ class SpanningTreeMixin(NetworkBase):
 
     # ---- flooding ----------------------------------------------------------
     @structure_memo
-    def flood(self, src: tuple[str, int]) -> Flood:
+    def flood(self, src: tuple[str, int], dst_mac: str | None = None) -> Flood:
         """Send one broadcast frame out of an interface and follow every copy.
 
         Switches copy it out of every forwarding port except the one it came in
-        on; anything else just receives it. Copies are counted exactly per
+        on; anything else just receives it. With ``dst_mac`` it's a unicast frame
+        instead: a switch that knows that MAC sends it out of that one port (or drops
+        it, if that's where it came in), and only one that doesn't floods it. Copies are counted exactly per
         (cable, direction), so even an exponential storm stays cheap to model.
         A loop-free area empties within as many hops as there are cables; if
         frames are still alive after that, they are circling: a storm.
@@ -335,6 +339,10 @@ class SpanningTreeMixin(NetworkBase):
                     continue
                 out.flaps.setdefault(dev, set()).add(port)
                 came_by = self.bundle(self.links[li])  # type: ignore[attr-defined]
+                if dst_mac is not None and (lj := self.known_link(dev, dst_mac)) is not None:  # type: ignore[attr-defined]
+                    if lj != li and (came_by is None or self.bundle(self.links[lj]) != came_by) and ok(self.links[lj]):  # type: ignore[attr-defined]
+                        nxt[(lj, self.links[lj].other(dev)[0])] += n
+                    continue                         # known: one port, or filtered
                 # vPC loop avoidance: what crossed a peer link never leaves on a bundle of that domain
                 over_peer = self.end(dev) if self.is_peer_link(self.links[li]) else None  # type: ignore[attr-defined]
                 bundles_used: set[frozenset] = set()

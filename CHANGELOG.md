@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+### Fidelity follow-ups
+- Unknown-unicast storm detection follows the frame's own copies: a switch that
+  knows the destination sends it one way, so a loop the frame never enters
+  doesn't storm.
+- Switches learn a frame's source as it crosses them, even if a later router
+  drops the packet.
+- A NAT gateway a packet reached and left through keeps its mapping when a
+  later router or the final ARP fails.
+- A destination on the sender's own network but not on its link is asked for
+  by ARP there before the send fails.
+- NAT mappings are per protocol: an ICMP echo mapping doesn't let UDP back in.
+- A topology change flushes every STP switch in the area as it was or is now;
+  switches with STP off hear of none.
+
 ### The internet and NAT
 - `internet <group>` declares the public internet. Gateways cabled to it (their
   WAN ports are those with the shortest cabled path to it) run NAT: traffic goes

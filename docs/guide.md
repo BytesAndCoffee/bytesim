@@ -438,9 +438,11 @@ below), and switches forward by what that teaches them:
    crosses learns the sender's MAC on the port it came in by.
 2. The reply travels back by those entries, and the switches on its way learn
    the answering interface's MAC.
-3. The frame follows the switches' entries. A switch that doesn't know the
-   destination floods it; an entry for a cable that can't carry data counts
-   as forgotten. A wrong entry misdelivers or drops the frame, unless an ARP
+3. The frame follows the switches' entries, and each switch it crosses learns
+   its source. A switch that doesn't know the destination floods it (but a
+   switch that does sends it one way only, so only the copies that really
+   circle a loop set off a storm); an entry for a cable that can't carry data
+   counts as forgotten. A wrong entry misdelivers or drops the frame, unless an ARP
    reply has just corrected it.
 
 ARP for an address nobody has is still sent: the host asks on its own network,
@@ -495,7 +497,9 @@ drop route, a NAT) ends the list with `*`, after the hops before it.
 
 Packets act on the network only as far as they get. A frame lost on its first
 hop never reaches the router, so that router opens no NAT mapping and sends no
-ARP of its own.
+ARP of its own. What a packet did reach still happens when something further on
+drops it: the switches it crossed learn its source, and a NAT gateway it left
+through keeps the mapping.
 
 Detailed sends log the address path, an ARP line for every hop (`ARP (3,1) is-at
 R1C`) and the TTL. Multicast also reports where copies were made and how many
@@ -710,8 +714,9 @@ stp cost s7:3 2000           a cheaper port is preferred toward the root (defaul
 broadcast c1                 flood one frame from c1 (or c1:2, r1:p6…)
 ```
 
-When the tree changes (a cable fails, a priority or cost changes), the switches
-in that area flush their MAC tables, as a topology-change notice makes them.
+When the tree changes (a cable fails, a priority or cost changes), the STP
+switches in that area flush their MAC tables, as a topology-change notice makes
+them. Switches with STP off never hear of it.
 
 **What sets off a storm:** a `broadcast`, a DHCP DISCOVER, a gratuitous ARP
 from a computer whose link comes up, an ARP request, or a frame for a MAC no
@@ -1253,9 +1258,10 @@ ByteSim models the behaviours above and deliberately skips the rest:
 - Ping times are random. Hop counts and TTLs are real.
 - MAC tables have no size limit, and an STP change flushes a whole area at
   once rather than ageing it fast.
-- NAT maps addresses and ports but not protocols: ping and unicast flows are
-  mapped alike, and nothing rewrites checksums. Addresses stay globally unique
-  (there are no overlapping private ranges), and there are no port forwards.
+- NAT knows two protocols: ping is ICMP and unicast is UDP, each with its own
+  mappings, so one never lets the other back in. Nothing rewrites checksums.
+  Addresses stay globally unique (there are no overlapping private ranges), and
+  there are no port forwards.
 - Overlay tunnels decide hole punching from the NAT types (easy or hard)
   rather than by exchanging probe packets.
 - Hole punching works unless both ends are behind hard NAT; real mesh VPNs

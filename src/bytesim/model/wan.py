@@ -105,15 +105,17 @@ class WanMixin(NetworkBase):
         return None
 
     def nat_map(self, r: str, p_out: int, source: tuple[tuple[int, int], int],
-                remote: str) -> tuple[tuple[tuple[int, int], int], str]:
+                remote: str, proto: str = "udp") -> tuple[tuple[tuple[int, int], int], str]:
         """A packet leaving NAT gateway r by its WAN port p_out: map its source (address,
-        port) to a public endpoint that no other live flow holds. Returns the translated
+        port) to a public endpoint that no other live flow holds. Mappings are per
+        protocol (icmp for echo, udp for unicast), as a real NAT keys them. Returns the translated
         source and what to say about it."""
         public = self.addr_of((r, p_out))  # type: ignore[attr-defined]
         maps = self.nat_table.setdefault(r, [])
         maps[:] = [m for m in maps if m["expires"] > self.clock]
         hard = r in self.nat_hard
-        same = [m for m in maps if m["inside"] == source and (not hard or m["remote"] == remote)]
+        same = [m for m in maps if m["inside"] == source and m.get("proto", "udp") == proto
+                and (not hard or m["remote"] == remote)]
         if same:
             pport = same[0]["public"][1]
         else:
@@ -126,13 +128,13 @@ class WanMixin(NetworkBase):
                 m["expires"] = self.clock + NAT_IDLE
                 break
         else:
-            maps.append({"inside": source, "public": (public, pport), "remote": remote,
+            maps.append({"inside": source, "public": (public, pport), "remote": remote, "proto": proto,
                          "expires": self.clock + NAT_IDLE})
         note = (f"NAT at {r}: {fmt(source[0])}:{source[1]} leaves as {fmt(public)}:{pport} "
                 f"(its WAN address; {'hard' if hard else 'easy'} NAT)")
         return (public, pport), note
 
-    def nat_chain(self, remote: str, inside: tuple[int, int]) -> list[tuple[str, dict]]:
+    def nat_chain(self, remote: str, inside: tuple[int, int], proto: str = "udp") -> list[tuple[str, dict]]:
         """The live mappings that carry remote's traffic back to an inside address,
         innermost gateway first ([] if none)."""
         chain: list[tuple[str, dict]] = []
@@ -140,7 +142,7 @@ class WanMixin(NetworkBase):
         while len(chain) < len(self.nat_table) + 1:
             hit = next(((g, m) for g, maps in sorted(self.nat_table.items()) for m in reversed(maps)
                         if (m["inside"] == target if chain else m["inside"][0] == target)
-                        and m["remote"] == remote and m["expires"] > self.clock
+                        and m["remote"] == remote and m.get("proto", "udp") == proto and m["expires"] > self.clock
                         and g in self.devices and self.devices[g].up), None)
             if hit is None:
                 break
@@ -148,12 +150,13 @@ class WanMixin(NetworkBase):
             target = hit[1]["public"]
         return chain
 
-    def nat_return(self, src: str, remote: str, inside: tuple[str, int]) -> tuple[list[Leg], list[str]] | None:
+    def nat_return(self, src: str, remote: str, inside: tuple[str, int],
+                   proto: str = "udp") -> tuple[list[Leg], list[str]] | None:
         """src sending back on a flow the inside started: to the outermost gateway's public
         endpoint, translated inward one gateway at a time. None without live mappings.
         ``nat_returning`` holds the mappings used, for each gateway to refresh when the
         packet reaches it."""
-        chain = self.nat_chain(remote, self.addr_of(inside))  # type: ignore[attr-defined]
+        chain = self.nat_chain(remote, self.addr_of(inside), proto)  # type: ignore[attr-defined]
         if not chain:
             return None
         self.nat_returning = dict(chain)
