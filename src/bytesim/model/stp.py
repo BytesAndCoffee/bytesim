@@ -245,6 +245,13 @@ class SpanningTreeMixin(NetworkBase):
                 notes.append(f"STP {sw}:p{p} blocking → forwarding")
         for sw, p in sorted(self.stp_blocked - before):
             notes.append(f"STP {sw}:p{p} → blocking")
+        # A topology change (TCN): every switch in the changed area flushes its MAC
+        # table, since what it learned may now lie the other way.
+        changed = {sw for sw, _ in before ^ self.stp_blocked if sw in self.devices}
+        if changed:
+            roots = {self.stp_roots.get(sw, sw) for sw in changed}
+            self.forget_macs({sw for sw in self.devices  # type: ignore[attr-defined]
+                              if self.devices[sw].kind == "s" and self.stp_roots.get(sw, sw) in roots} | changed)
         if self.storming:
             # A storm lives as long as its area still has a forwarding loop.
             looped = {d for i in self.loop_links(honor_stp=True)
@@ -337,7 +344,7 @@ class SpanningTreeMixin(NetworkBase):
         for gen in flood.generations:
             for li, dev in gen:
                 if self.devices[dev].kind == "s":
-                    self.mac_tables.setdefault(dev, {})[mac] = self.links[li].port_of(dev)
+                    self.learn_mac(dev, mac, self.links[li].port_of(dev))  # type: ignore[attr-defined]
 
     def storm_near(self, dev_id: str) -> set[str]:
         """Storming switches in the switched area(s) this device is plugged into."""

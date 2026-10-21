@@ -7,6 +7,7 @@ import zlib
 from collections import deque
 from contextlib import contextmanager
 
+from ..constants import MAC_AGE
 from .base import NetworkBase
 from .types import Link
 
@@ -67,6 +68,8 @@ def route_memo(fn):
 
 
 class Layer2Mixin(NetworkBase):
+    flooded: list[str] = []          # set by forward(): switches that flooded the last frame
+
     @contextmanager
     def remembering(self):
         """A scope in which the structure is remembered (nothing may change it meanwhile)."""
@@ -370,6 +373,7 @@ class Layer2Mixin(NetworkBase):
     def forward(self, src: tuple[str, int], dst: tuple[str, int],
                 flow: str | None = None) -> tuple[list[tuple[str, int]] | None, str]:
         """Follow a unicast frame by the switches' MAC tables: (path, "") or (None, why).
+        ``self.flooded`` lists the switches that didn't know the destination.
 
         A switch that knows the destination MAC sends the frame out of that port
         only; one that doesn't floods it, and the copy heading for the destination
@@ -384,6 +388,7 @@ class Layer2Mixin(NetworkBase):
         if li is None or not self.usable(self.links[li]):
             return None, f"{src[0]}'s cable can't carry data"
         path, u, seen = [(src[0], -1)], src[0], set()
+        self.flooded = []
         while True:
             v, vp = self.links[li].other(u)
             path.append((v, li))
@@ -404,6 +409,7 @@ class Layer2Mixin(NetworkBase):
                     return None, (f"{v}'s MAC table has {mac} on port {entry}, where the frame came in "
                                   f"(it filters it)")
             else:
+                self.flooded.append(v)
                 out = self._toward(v, li, arrive)
                 if out is None:
                     return None, f"{v} floods the frame for {mac}, but no copy reaches it"
@@ -414,7 +420,52 @@ class Layer2Mixin(NetworkBase):
         mac = self.devices[src[0]].mac(src[1])
         for dev_id, li in path[1:]:
             if self.devices[dev_id].kind == "s":
-                self.mac_tables.setdefault(dev_id, {})[mac] = self.links[li].port_of(dev_id)
+                self.learn_mac(dev_id, mac, self.links[li].port_of(dev_id))
+
+    def learn_mac(self, switch: str, mac: str, port: int) -> None:
+        """One MAC heard on one port: (re)learned there, a move if it was elsewhere."""
+        self.mac_tables.setdefault(switch, {})[mac] = port
+        self.mac_seen.setdefault(switch, {})[mac] = self.clock
+
+    def forget_macs(self, switches: set[str] | None = None) -> None:
+        """Empty the MAC tables of some switches (every switch if None)."""
+        for sw in list(self.mac_tables) if switches is None else switches:
+            self.mac_tables.pop(sw, None)
+            self.mac_seen.pop(sw, None)
+
+    def _drop_mac(self, switch: str, mac: str) -> None:
+        self.mac_tables[switch].pop(mac, None)
+        self.mac_seen.get(switch, {}).pop(mac, None)
+        if not self.mac_tables[switch]:
+            self.forget_macs({switch})
+
+    def flush_ports(self, ports: set[tuple[str, int]]) -> None:
+        """A port's link went down: its switch forgets the MACs it learned there."""
+        for sw, p in ports:
+            for mac, at in list(self.mac_tables.get(sw, {}).items()):
+                if at == p:
+                    self._drop_mac(sw, mac)
+
+    def flush_macs(self) -> None:
+        """Forget entries on ports whose cable is gone or can't carry data (link down)."""
+        dead = set()
+        for sw, table in self.mac_tables.items():
+            if sw not in self.devices:
+                dead |= {(sw, p) for p in table.values()}
+                continue
+            for p in set(table.values()):
+                li = self.link_index(sw, p)
+                if li is None or not self.usable(self.links[li]):
+                    dead.add((sw, p))
+        self.forget_macs({sw for sw, _ in dead if sw not in self.devices})
+        self.flush_ports({e for e in dead if e[0] in self.devices})
+
+    def age_macs(self) -> None:
+        """Entries not heard from for MAC_AGE seconds age out."""
+        for sw, seen in list(self.mac_seen.items()):
+            for mac, t in list(seen.items()):
+                if self.clock - t >= MAC_AGE:
+                    self._drop_mac(sw, mac)
 
 
     # ---- graph-only mode -----------------------------------------------

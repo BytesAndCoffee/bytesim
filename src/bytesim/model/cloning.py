@@ -250,8 +250,6 @@ class CloningMixin(NetworkBase):
             qx, qy = self._port_like(x, px), self._port_like(y, py)
             moved += [f"{d}:p{p}→p{q}" for d, p, q in ((x, px, qx), (y, py, qy)) if p != q]
             self.links.append(Link(x, qx, y, qy, role))
-        if made:
-            self.mac_tables = {}
         return CablingResult(len(made), already, moved)
 
 

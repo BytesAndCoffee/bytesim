@@ -156,6 +156,7 @@ class AddressingMixin(NetworkBase):
         (the UI animates their DHCP exchange itself).
         """
         notes = self.stp_update()  # type: ignore[attr-defined]
+        self.flush_macs()  # type: ignore[attr-defined]
         notes += [f"addr {n}" for n in self.autoconf_routers()]
         for d in self.sorted_devices():
             if d.kind != "c":
@@ -187,4 +188,24 @@ class AddressingMixin(NetworkBase):
                     notes.append(f"{name}: {e}")
                 if ifc.addr != old:
                     notes.append(f"{name} → {fmt(ifc.addr)} via {ifc.via}")
+        notes += self._gratuitous_arps()
+        return notes
+
+    def _gratuitous_arps(self) -> list[str]:
+        """A computer whose link has just come up announces itself (gratuitous ARP), so
+        switches learn where it now is. Into a live loop, that sets off a storm."""
+        up = {(d.id, p, self.links[li].other(d.id)) for d in self.devices.values() if d.kind == "c" and d.up
+              for p, _ in self.addressed(d.id)
+              if (li := self._logical_link(d.id, p)) is not None and self.usable(self.links[li])}  # type: ignore[attr-defined]
+        before, self._nics_up = self._nics_up, up       # keyed by what's at the other end: a move counts
+        notes = []
+        for d, p, _ in sorted(up - before) if before is not None else []:
+            nic = (d, p)
+            fl = self.flood(nic)  # type: ignore[attr-defined]
+            if fl.storm:
+                self.start_storm(fl)  # type: ignore[attr-defined]
+                notes.append(f"{nic[0]}'s gratuitous ARP set off a broadcast storm on "
+                             f"{' '.join(sorted(fl.storm_switches, key=self.bridge_id))}")  # type: ignore[attr-defined]
+            else:
+                self.learn_flood(fl)  # type: ignore[attr-defined]
         return notes

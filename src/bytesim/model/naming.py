@@ -123,6 +123,8 @@ class NamingMixin(NetworkBase):
         self.stp_root_ports = {ren(d): p for d, p in self.stp_root_ports.items()}
         self.storming = {ren(d) for d in self.storming}
         self.mac_flaps = {ren(d): f for d, f in self.mac_flaps.items()}
-        self.mac_tables = {}
+        self.forget_macs()   # MACs are named after device ids
+        if self._nics_up is not None:
+            self._nics_up = {(ren(d), p, (ren(o), op)) for d, p, (o, op) in self._nics_up}
         self.notes = []
         return changed

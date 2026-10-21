@@ -16,6 +16,12 @@ from .base import CommandHost
 from .registry import command
 
 
+def clock_text(seconds: float) -> str:
+    """Simulated time as h:mm:ss."""
+    s = int(seconds)
+    return f"{s // 3600}:{s // 60 % 60:02d}:{s % 60:02d}"
+
+
 class NoArpReply(NetError):
     """An address no interface has: whoever asks for it by ARP gets no reply."""
 
@@ -98,6 +104,26 @@ class TrafficCommands(CommandHost):
             self.animation_speed = speed
         self.log_msg(f"animation speed: [b]{self.animation_speed:g}x[/]"
                      " · slow=0.5x · normal=1x · fast=3x")
+
+    @command("wait", "sleep")
+    def cmd_wait(self, args: list[str], opts: dict[str, str]) -> None:
+        """Let simulated time pass: MAC entries, ARP caches, NAT mappings and leases age."""
+        usage = "usage: wait <seconds>  (or 90s, 5m, 2h)  ·  wait  shows the clock"
+        if len(args) > 1:
+            raise NetError(usage)
+        if args:
+            tok = args[0].lower()
+            scale = {"s": 1, "m": 60, "h": 3600}.get(tok[-1], 1)
+            try:
+                seconds = float(tok[:-1] if tok[-1] in "smh" else tok) * scale
+            except ValueError:
+                raise NetError(usage) from None
+            if not isfinite(seconds) or not 0 < seconds <= 7 * 24 * 3600:
+                raise NetError("wait between 0 and a week (604800 seconds)")
+            for note in self.net.advance(seconds):
+                self.log_msg(f"  [orchid]{escape(note)}[/]")
+        self.log_msg(f"clock: [b]{clock_text(self.net.clock)}[/]")
+        self.refresh_sidebar()
 
     @staticmethod
     def _flatten(legs: list[Leg]) -> list[tuple[str, int]]:

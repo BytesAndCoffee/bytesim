@@ -38,6 +38,7 @@ class Network(GroupsMixin, Layer2Mixin, AddressingMixin, RoutingMixin, HAMixin, 
     def remove(self, dev_id: str) -> int:
         dev = self.get(dev_id)
         before = len(self.links)
+        self.flush_ports({e for l in self.links if l.touches(dev.id) for e in ((l.a, l.pa), (l.b, l.pb))})
         self.links = [l for l in self.links if not l.touches(dev.id)]
         del self.devices[dev.id]
         self._drop_from_groups([dev.id])
@@ -58,7 +59,7 @@ class Network(GroupsMixin, Layer2Mixin, AddressingMixin, RoutingMixin, HAMixin, 
         self.stp_priority.pop(dev.id, None)
         self.storming.discard(dev.id)
         self.mac_flaps.pop(dev.id, None)
-        self.mac_tables = {}
+        self.forget_macs({dev.id})
         return before - len(self.links)
 
     def resize(self, dev_id: str, nports: int) -> None:
@@ -104,11 +105,17 @@ class Network(GroupsMixin, Layer2Mixin, AddressingMixin, RoutingMixin, HAMixin, 
             return db is None or l.other(da.id)[0] == db.id
 
         before = len(self.links)
+        gone = [l for l in self.links if match(l)]
         self.links = [l for l in self.links if not match(l)]
-        if len(self.links) != before:
-            self.mac_tables = {}      # topology changed: switches forget what they learned
+        self.flush_ports({e for l in gone for e in ((l.a, l.pa), (l.b, l.pb))})   # link down at both ends
         return before - len(self.links)
 
+
+    def advance(self, seconds: float) -> list[str]:
+        """Let simulated time pass. Returns notes on what expired along the way."""
+        self.clock += seconds
+        self.age_macs()
+        return []
 
     # ---- persistence ---------------------------------------------------
     def to_json(self) -> str:

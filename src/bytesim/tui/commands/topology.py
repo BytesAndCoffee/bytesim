@@ -313,5 +313,5 @@ class TopologyCommands(CommandHost):
                 l.up = up
                 self.log_msg(f"[{'green' if up else 'red'}]{'✓' if up else '✕'}[/] cable "
                              f"{self._link_text(l, state=False)} {verb}")
-        net.mac_tables = {}
+        net.flush_macs()                  # link down: switches forget what was learned there
         self.changed()

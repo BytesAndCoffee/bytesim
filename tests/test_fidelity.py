@@ -256,3 +256,71 @@ def test_a_member_failure_moves_only_its_own_flows():
     assert {after[f] for f in flows if before[f] == 1} == {0, 2}
     net.links[1].up = True
     assert {f: net._logical_link("s1", 1, f) for f in flows} == before
+
+
+# ---- MAC aging, flushing and moves ------------------------------------------------
+
+def test_mac_entries_age_out_and_unknown_frames_flood_again():
+    net = lan()
+    r = ScriptRunner(net)
+    r.run("unicast c1 c2")
+    assert net.forward(("c1", 1), ("c2", 1))[0] and net.flooded == []
+    r.run("wait 299")
+    assert net.mac_tables["s1"]["C2A"] == 2
+    r.run("wait 1s")
+    assert "s1" not in net.mac_tables
+    assert net.forward(("c1", 1), ("c2", 1))[0] == [("c1", -1), ("s1", 0), ("c2", 1)]
+    assert net.flooded == ["s1"]
+    assert "clock: 0:05:00" in plain(r)
+
+
+def test_wait_rejects_nonsense():
+    r = ScriptRunner(lan())
+    for bad in ("wait -1", "wait soon", "wait 8d", "wait 1 2"):
+        with pytest.raises(NetError):
+            r.run(bad)
+
+
+def test_a_dead_link_flushes_only_its_port():
+    net = lan()
+    r = ScriptRunner(net)
+    r.run("unicast c1 c2\nunicast c3 c1")
+    r.run("fail s1:3")
+    assert net.mac_tables["s1"] == {"C1A": 1, "C2A": 2}
+    r.run("restore s1:3")
+    assert "C3A" not in net.mac_tables["s1"]
+
+
+def test_a_moved_host_announces_its_new_port():
+    net = lan()
+    r = ScriptRunner(net)
+    r.run("unicast c1 c2")
+    assert net.mac_tables["s1"]["C2A"] == 2
+    r.run("unlink c2\nc2 s1:4")
+    net.reconcile()
+    assert net.mac_tables["s1"]["C2A"] == 4                 # its gratuitous ARP
+    last = net.forward(("c1", 1), ("c2", 1))[0][-1]
+    assert last[0] == "c2" and net.links[last[1]].port_of("s1") == 4
+
+
+def test_an_stp_topology_change_flushes_the_area():
+    net = build(["c", "s", "s", "s", "c"],
+                [("c1", "s1"), ("s1", "s2"), ("s2", "s3"), ("s3", "s1"), ("s3", "c2")])
+    r = ScriptRunner(net)
+    r.run("unicast c1 c2")
+    assert set(net.mac_tables) == {"s1", "s2", "s3"}
+    forwarding = next(i for i, l in enumerate(net.links) if {l.a, l.b} == {"s1", "s3"})
+    net.links[forwarding].up = False
+    net.reconcile()
+    assert not net.mac_tables
+    r.run("unicast c1 c2")
+    assert "delivered to c2" in plain(r)
+
+
+def test_a_host_plugged_into_a_live_loop_storms_at_once():
+    r = loop(stp=False)
+    r.net.add("c")
+    r.run("c3 s2")
+    notes = r.net.reconcile()
+    assert any("c3's gratuitous ARP set off a broadcast storm" in n for n in notes)
+    assert r.net.storming == {"s1", "s2", "s3"}

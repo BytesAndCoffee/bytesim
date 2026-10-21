@@ -97,6 +97,14 @@ class ByteSimApp(ConsoleCommands, TopologyCommands, GroupCommands, AddressComman
             self.call_after_refresh(self.run_command, line)
         self.refresh_sidebar()
         self.call_after_refresh(self.settle_heap)
+        self.set_interval(1.0, self._clock_tick)
+
+    def _clock_tick(self) -> None:
+        """Simulated time keeps pace with the wall clock (and stops while paused)."""
+        if self.paused:
+            return
+        for note in self.net.advance(1.0):
+            self.log_msg(f"  [orchid]{escape(note)}[/]")
 
     def settle_heap(self) -> None:
         """Collect once, then exempt what survives (widgets, the network) from later

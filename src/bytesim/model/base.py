@@ -22,6 +22,9 @@ class NetworkBase:
         self.ifaces: dict[str, Iface] = {}        # "c1:1" -> Iface
         self.dhcp_off: set[str] = set()           # routers/gateways not serving DHCP
         self.mac_tables: dict[str, dict[str, int]] = {}   # switch -> {mac: port}
+        self.mac_seen: dict[str, dict[str, float]] = {}   # switch -> {mac: clock when last heard}
+        self.clock = 0.0                          # simulated seconds; `wait` and the app advance it
+        self._nics_up: set[tuple] | None = None   # (computer, port, far end) live at the last reconcile
         self.clusters: dict[str, str] = {}        # HA cluster (a group of routers) -> split policy
         self.cluster_modes: dict[str, str] = {}   # cluster -> "active-passive" (absent: active-active)
         self.lags: set[frozenset[str]] = set()    # bundles: pairs of ends (a device, or an MLAG domain)
