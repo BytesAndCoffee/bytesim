@@ -140,6 +140,7 @@ through devices.
 - [Construction scripts](docs/scripts.md): `export script` and `run`, with a tutorial
 - [Save file format](docs/file-format.md)
 - [Changelog](CHANGELOG.md)
+- [Roadmap](ROADMAP.md): planned work
 
 ## Using the model from Python
 
