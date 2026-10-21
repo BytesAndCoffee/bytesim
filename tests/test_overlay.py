@@ -550,3 +550,103 @@ def test_yaml_overlay_members_can_be_groups():
                         "links: [{chain: [g1, s1, c1]}, {connect: [s1, c2]}]\n"
                         "overlays: {ol: {members: [office, g1], routes: [c1], lan: on}}\n")
     assert net.overlay_members("ol") == ["c1", "c2", "g1"] and net.overlays["ol"]["lan"] is True
+
+
+# ---- review follow-ups ----------------------------------------------------------------
+
+@pytest.mark.parametrize("cmd, error", [
+    ("fail c8\noverlay new c1 coord=c8", "c1 can't join overlay new: coordination server c8 is down"),
+    ("fail g3:1\noverlay new c2 coord=c7", "c2 can't reach coordination server c7"),
+    ("fail c8\noverlay ol c2 coord=c8", "c2 can't join overlay ol: coordination server c8 is down"),
+])
+def test_new_members_must_reach_the_coordination_server_the_command_sets(cmd, error):
+    r = runner()
+    with pytest.raises(NetError, match=error):
+        r.run(cmd)
+    assert "new" not in r.net.overlays and r.net.overlays["ol"]["coord"] == "c7"   # nothing changed
+
+
+def test_joining_with_coord_none_needs_no_server():
+    r = runner()
+    r.run("fail c7\noverlay ol c2 coord=none")
+    assert "c2" in r.net.overlay_members("ol") and "coord" not in r.net.overlays["ol"]
+
+
+def test_overlays_avoid_networks_interfaces_already_use():
+    r = runner()
+    r.run("ip c2 (101,5) 1")                                # a static address in the overlay range
+    r.run("overlay lab c6")
+    assert r.net.overlays["lab"]["net"] == 102
+    with pytest.raises(NetError, match="network 101 is in use by interfaces"):
+        r.run("overlay lab2 c4 net=101")
+    with pytest.raises(NetError, match="network 100 is overlay ol's"):
+        r.run("ip c4 (100,9)")
+
+
+def test_a_save_whose_overlay_network_clashes_with_an_interface_moves_the_overlay():
+    net = runner().net
+    net.iface("c2", 1).mode, net.iface("c2", 1).net, net.iface("c2", 1).host = "static", 100, 77
+    net.load_overlays(net.overlay_state())
+    assert net.overlays["ol"]["net"] == 101 and net.ol_resolve((100, 77)) is None
+
+
+@pytest.mark.parametrize("name", ["all", "off", "remove", "internet", "none", "peers"])
+def test_yaml_rejects_overlay_names_the_command_reserves(name):
+    with pytest.raises(NetError, match=f"overlays.{name}: '{name}' is a word the overlay command uses"):
+        load_topology("schema: bytesim/topology-v1\ndevices: {c1: 1}\n"
+                      f"overlays: {{'{name}': {{members: [c1]}}}}\n")
+
+
+def _replies(r):
+    """Each traced reply's endpoint line, ECHO REPLY line and first note, by replier and sender."""
+    lines = text(r).splitlines()
+    out = {}
+    for i, line in enumerate(lines):
+        if m := re.match(r"TRACE REPLY (\S+) → (\S+) · endpoints (.*)", line):
+            echo = lines[i + 2]                               # after the hop-by-hop line
+            note = next(n.strip() for n in lines[i + 3:] if not n.strip().startswith("ARP"))
+            out[m[1].split("@")[0], m[2]] = (m[3], echo, note)
+    return out
+
+
+def test_mping_overlay_replies_report_their_own_tunnel_not_the_last_request():
+    r = runner()
+    r.run("trace on\nmping all all@ol")
+    got = _replies(r)
+    assert len(got) == 12
+    for (replier, sender), (ends, echo, note) in got.items():
+        here, there = r.net.ol_addr("ol", replier), r.net.ol_addr("ol", sender)
+        assert ends.endswith(f"→ {sender}:nic1 {fmt(r.net.addr_of((sender, 1)))}"), (replier, sender, ends)
+        assert echo.startswith(f"ECHO REPLY {fmt(here)} → {fmt(there)} ({replier} → {fmt(there)} {sender})")
+        assert note.startswith(f"overlay ol: {fmt(here)} {replier} ⇢ {fmt(there)} {sender}, a reply")
+        relayed = {replier, sender} == {"c3", "c5"}
+        assert note.endswith("(relayed via c8)" if relayed else "(direct)"), note
+
+
+def test_mping_replies_through_an_exit_node_report_their_own_endpoints():
+    r = runner()
+    r.run("overlay ol exit=c7\ntrace on\nmping c1 c8 c3@ol")    # c8 through the exit node, c3 tunnelled
+    got = _replies(r)
+    assert got["c3", "c1"][2].startswith("overlay ol: (100,2) c3 ⇢ (100,1) c1, a reply")
+    for d in ("c8",):
+        ends, _, note = got[d, "c1"]
+        assert ends.endswith("→ c1:nic1 (7,10)") and note == "a reply: back along the request's path to c1"
+
+
+@pytest.mark.parametrize("name", ["Off", "REMOVE", "Internet"])
+def test_saves_drop_overlays_named_like_reserved_words_in_any_case(name):
+    net = runner().net
+    state = net.overlay_state()
+    state[name] = dict(state["ol"], net=105)
+    net.load_overlays(state)
+    assert set(net.overlays) == {"ol"}
+
+
+def test_a_save_loads_even_when_no_overlay_network_is_free():
+    net = runner().net
+    nics = [k for k in net.ifaces if net.ifaces[k].addr][:10]   # an older save: every overlay network in use
+    assert len(nics) == 10
+    for nic, ov_net in zip(nics, range(100, 110)):
+        net.ifaces[nic] = Iface(mode="static", via="static", net=ov_net, host=1)
+    back = Network.from_json(json.loads(json.dumps(net.to_json())))
+    assert back.overlays == {} and back.ifaces[nics[0]].net == 100

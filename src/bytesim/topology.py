@@ -44,6 +44,7 @@ import yaml
 from .constants import ALIASES, AUTO, CLUSTER_MODES, GROUP_NAME, KINDS, POLICIES, RANK, REF, ROLES
 from .model import NetError, Network
 from .model.macros import macro_pairs
+from .model.overlay import OVERLAY_RESERVED
 from .model.types import Device, Iface
 
 SCHEMA = "bytesim/topology-v1"
@@ -419,6 +420,8 @@ class _Builder:
             ov = str(ov).lower()
             if not GROUP_NAME.match(ov) or REF.match(ov):
                 raise NetError(f"{where}: an overlay name starts with a letter and doesn't look like a device id")
+            if ov in OVERLAY_RESERVED:
+                raise NetError(f"{where}: {ov!r} is a word the overlay command uses: pick another name")
             t = t or {}
             unknown = set(t) - {"net", "members", "hosts", "coord", "exit", "lan", "routes", "acl"}
             if unknown:

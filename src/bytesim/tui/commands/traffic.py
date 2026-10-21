@@ -20,6 +20,7 @@ class TrafficCommands(CommandHost):
     INTERNET = ("internet", "inet", "wan")
     _overlay_src: tuple[int, int] | None = None   # set by _plan: the inner source of a tunnelled packet
     _carried = False                              # set by _plan: the overlay carried the last plan
+    _relay: str | None = None                     # set by _plan: the relay the last tunnel went through
     SPEEDS = {"slow": 0.5, "normal": 1.0, "fast": 3.0}
     BULK_PAIRS = 128
 
@@ -195,7 +196,7 @@ class TrafficCommands(CommandHost):
                                + self.storm_hint(src, dst))  # type: ignore[attr-defined]
             return label, path, None, internet
         net.notes.clear()
-        self._overlay_src, self._carried = None, False
+        self._overlay_src, self._carried, self._relay = None, False, None
         if (overlay := self._overlay_dst(tok)) is not None:
             return self._plan_tunnel(src, *overlay)
         storm = None
@@ -246,11 +247,32 @@ class TrafficCommands(CommandHost):
         """A packet to an overlay address: WireGuard between the members' real interfaces."""
         net = self.net
         with net.remembering():
-            legs, notes = net.tunnel(src, dst, ov)
-        net.notes.extend(notes)
+            conn = net.connection(src, dst, ov)
+        legs, self._relay = conn.legs, conn.relay
+        net.notes.extend(conn.notes)
         self._last_dst = legs[-1][1] if legs else (dst, 1)
         self._overlay_src, self._carried = net.ol_addr(ov, src), True
         return f"{fmt(net.ol_addr(ov, dst))} {dst}", self._flatten(legs), legs, False
+
+    def _retrace_context(self, dst: str, dst_id: str, src: str, legs: list[Leg], relay: str | None) -> str:
+        """Set what a reply retracing its request's path reports (its own endpoints and
+        notes, not the last request planned) and return its label."""
+        net = self.net
+        net.notes.clear()
+        self._last_dst = legs[-1][1]
+        if (hit := self._overlay_dst(dst)) is None:      # through a subnet router or exit node
+            self._overlay_src = None
+            net.notes.append(f"a reply: back along the request's path to {src}")
+            return src
+        ov = hit[0]
+        here, there = net.ol_addr(ov, dst_id), net.ol_addr(ov, src)
+        if here is None or there is None:
+            raise NetError(f"{dst_id if here is None else src} left overlay {ov} while the request was out")
+        self._overlay_src = here
+        net.notes.append(f"overlay {ov}: {fmt(here)} {dst_id} ⇢ {fmt(there)} {src}, "
+                         f"a reply: back through the request's tunnel"
+                         + (f" (relayed via {relay})" if relay else " (direct)"))
+        return f"{fmt(there)} {src}"
 
     def _learn(self, legs: list[Leg] | None, both_ways: bool = False) -> None:
         for a, b, p in legs or []:
@@ -531,11 +553,12 @@ class TrafficCommands(CommandHost):
         endpoints: dict[str, tuple[tuple[str, int], tuple[str, int]]] = {}
         lost: list[str] = []
         carried: dict[str, list[Leg]] = {}           # replies to these retrace the overlay's path
+        relays: dict[str, str | None] = {}           # the relay a tunnel went through, if any
         for d in receivers:
             try:
                 _, path, legs, _ = self._plan(src, d)
                 if self._carried and legs:
-                    carried[d] = legs
+                    carried[d], relays[d] = legs, self._relay
             except NetError as e:
                 if self.trace_enabled:
                     self._log_path_trace_failure("REQUEST", src, d, e)
@@ -622,8 +645,10 @@ class TrafficCommands(CommandHost):
                     if any(li >= 0 and not net.usable(net.links[li]) for _, li in hops):
                         raise NetError("a cable on the way back failed while the request was out")
                     back = self._flatten(legs)
+                    reply_label = self._retrace_context(dst, dst_id, src, legs, relays.get(dst))
                 else:
                     _, back, legs, _ = self._plan(dst_id, reply_targets[dst], reply=True)
+                    reply_label = src
             except NetError as e:
                 if self.trace_enabled:
                     self._log_path_trace_failure("REPLY", dst, src, e)
@@ -633,10 +658,10 @@ class TrafficCommands(CommandHost):
                 finished()
                 return
             if self.trace_enabled:
-                self._log_path_trace("REPLY", dst, src, back, legs)
+                self._log_path_trace("REPLY", dst, src, back, legs, dst_iface=legs[-1][1] if legs else None)
             self._learn(legs)
             if detailed():
-                self._log_route("ECHO REPLY", "green", dst_id, src, back, legs, False)
+                self._log_route("ECHO REPLY", "green", dst_id, reply_label, back, legs, False)
             links = [li for _, li in back[1:]]
             c.heat(links)
             ttl = 64 - self._routers_in(back, legs)
