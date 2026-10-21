@@ -87,6 +87,9 @@ cabling patterns like `mesh` for the rest.
 - every cable on its exact ports, with its role (data, control, fabric);
 - HA clusters and their policies, STP settings (off, priority), DHCP servers
   switched off, interface settings (static addresses, ad-hoc, off);
+- the internet, NAT settings, relays and overlays, with their members'
+  overlay host numbers, coordination server, subnet routers, exit node and
+  access rules;
 - failures (in a last section, *Runtime state*).
 
 It doesn't rebuild:

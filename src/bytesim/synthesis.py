@@ -150,7 +150,8 @@ def _clone_equivalent(net: Network, a: str, b: str, phi: dict[str, str]) -> bool
             return False
         if (x in net.stp_off) != (y in net.stp_off) or net.stp_priority.get(x) != net.stp_priority.get(y):
             return False
-        if (x in net.dhcp_off) != (y in net.dhcp_off):
+        if ((x in net.dhcp_off) != (y in net.dhcp_off) or (x in net.nat_off) != (y in net.nat_off)
+                or (x in net.nat_hard) != (y in net.nat_hard)):
             return False
         if dx.kind != "s":
             for p in range(1, dx.nports + 1):
@@ -713,6 +714,47 @@ def render(net: Network, subs: list[Substitution], mode: str = "readable") -> tu
         blank()
         say("MLAG domains: groups of switches that act as one logical switch")
         lines.append("mlag " + " ".join(sorted(net.mlag_domains)))
+    if net.internet:
+        blank()
+        say("The public internet; gateways facing it run NAT")
+        lines.append(f"internet {net.internet}")
+    if net.nat_off:
+        lines.append(f"nat {' '.join(sorted(net.nat_off, key=lambda d: int(d[1:])))} off")
+    if net.nat_hard:
+        lines.append(f"nat {' '.join(sorted(net.nat_hard, key=lambda d: int(d[1:])))} hard")
+    if net.relays:
+        blank()
+        say("Relays: carry overlay traffic that can't go direct")
+        lines.append(f"relay {' '.join(net.relays)}")
+    if net.overlays:
+        blank()
+        say("Overlays: mesh VPNs between their members, through NAT")
+        state = net.overlay_state()
+        for t in sorted(state, key=lambda t: state[t]["net"]):
+            v = state[t]
+            # Members that would get their host number anyway join in one line; the rest
+            # (numbers freed by members who left) say theirs.
+            plain, pinned, nxt = [], [], 1
+            for d in sorted(v["members"], key=v["hosts"].get):
+                if v["hosts"][d] == nxt:
+                    plain.append(d)
+                    nxt += 1
+                else:
+                    pinned.append(d)
+            lines.append(" ".join(["overlay", t, *plain, f"net={v['net']}"]))
+            lines.extend(f"overlay {t} {d} host={v['hosts'][d]}" for d in pinned)
+            if coord := v.get("coord"):                    # after the members: joining checks it
+                lines.append(f"overlay {t} coord={coord}")
+            if v.get("routes"):
+                lines.append(f"overlay {t} advertise {' '.join(v['routes'])}")
+            if ex := v.get("exit"):
+                lines.append(f"overlay {t} exit={ex}")
+            if v.get("lan"):
+                lines.append(f"overlay {t} lan=on")
+            rules = dict.fromkeys(map(tuple, v.get("acl", [])))   # an allow-list: duplicates add nothing
+            lines.extend(f"acl {t} allow {a} {b}" for a, b in rules)
+            if v.get("acl") == []:
+                lines.append(f"acl {t} none")
     already = set(bundled)
     remaining_lags = lag_cmds(set(net.devices), final=True)
     if remaining_lags:

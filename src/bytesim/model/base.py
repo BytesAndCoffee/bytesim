@@ -26,6 +26,11 @@ class NetworkBase:
         self.cluster_modes: dict[str, str] = {}   # cluster -> "active-passive" (absent: active-active)
         self.lags: set[frozenset[str]] = set()    # bundles: pairs of ends (a device, or an MLAG domain)
         self.mlag_domains: set[str] = set()       # groups of switches that act as one logical switch
+        self.internet: str | None = None          # the group that is the public internet (see wan.py)
+        self.nat_off: set[str] = set()            # gateways facing the internet without NAT
+        self.nat_hard: set[str] = set()           # NAT gateways that map per destination (hole punching fails)
+        self.overlays: dict[str, dict] = {}       # overlay network name -> its state (see overlay.py)
+        self.relays: list[str] = []                 # devices running a relay, in preference order
         self.notes: list[str] = []                # remarks from the last route() for the console
         self.stp_off: set[str] = set()            # switches with spanning tree switched off
         self.stp_priority: dict[str, int] = {}    # bridge priority (default 32768; lower = root)

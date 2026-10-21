@@ -28,7 +28,15 @@ template-based YAML format, see [topology-format.md](topology-format.md).
   "lags": [["s8", "s12"], ["fab1", "g1"]],
   "mlag_domains": ["fab1"],
   "stp_off": ["s4", "s5"],
-  "stp_priority": { "s7": 4096 }
+  "stp_priority": { "s7": 4096 },
+  "internet": "isp",
+  "nat_off": ["g6"],
+  "nat_hard": ["g4", "g5"],
+  "overlays": {
+    "ol": { "net": 100, "members": ["c1", "c3", "c7"], "hosts": { "c1": 1, "c3": 2, "c7": 4 },
+            "coord": "c7", "exit": "c7", "lan": true, "routes": ["c3"], "acl": [["c1", "c3"], ["site1", "internet"]] }
+  },
+  "relays": ["c8"]
 }
 ```
 
@@ -49,9 +57,16 @@ template-based YAML format, see [topology-format.md](topology-format.md).
 | `mlag_domains` | groups whose switches act as one logical switch (multi-chassis aggregation) |
 | `stp_off` | switches with spanning tree switched off (every other switch runs it) |
 | `stp_priority` | switch → bridge priority (default 32768; lower wins the root election) |
+| `internet` | the group that is the public internet (absent: none, so gateways lead to an implicit internet) |
+| `nat_off` | gateways facing the internet that don't run NAT |
+| `nat_hard` | gateways whose NAT is hard (hole punching to another hard NAT fails) |
+| `overlays` | overlay → `net` (overlay network, 100–109), `members` (join order), `hosts` (member → overlay host number; missing ones are numbered in join order), and optionally `coord`, `exit`, `lan`, `routes` (subnet routers) and `acl` (`[from, to]` pairs; an empty list allows nothing, a missing one everything) |
+| `relays` | devices that relay overlay traffic, in preference order |
 
 Blocked ports and storms aren't saved: blocked ports are recomputed when a file
 is loaded, and a storm only starts when traffic is sent.
 
-Entries that refer to missing devices or groups are dropped on load. An
+Entries that refer to missing devices or groups are dropped on load, and so
+are overlays that don't make sense (bad names, switches as members, duplicate
+networks or host numbers are dropped or renumbered). An
 address in an older format is also dropped, and recomputed from the cabling.

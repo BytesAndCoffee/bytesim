@@ -26,11 +26,13 @@ from .commands.switching import SwitchingCommands
 from .commands.registry import collect
 from .commands.topology import TopologyCommands
 from .commands.traffic import TrafficCommands
+from .commands.wan import WanCommands
+from .commands.overlay import OverlayCommands
 from .inspector import render_inspector
 
 
 class ByteSimApp(ConsoleCommands, TopologyCommands, GroupCommands, AddressCommands, TrafficCommands, NamingCommands,
-                 SwitchingCommands, ScriptCommands, HistoryCommands, Interpreter, App):
+                 SwitchingCommands, WanCommands, OverlayCommands, ScriptCommands, HistoryCommands, Interpreter, App):
     """Canvas on the left, inspector on the right, console and command line below."""
 
     TITLE = "ByteSim"

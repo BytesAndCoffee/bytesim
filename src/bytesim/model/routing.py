@@ -109,10 +109,12 @@ class RoutingMixin(NetworkBase):
                         ways_in[e[0]].append((u, ((u, p), e, path)))
 
         # Where the packet can leave the router graph, and how much that costs.
+        # With a declared internet, "the internet" means one of its gateways.
+        public = self.public() if dst is None else set()  # type: ignore[attr-defined]
         ends: list[tuple[int, str, Leg | None]] = []
         for u in done:
             if dst is None:
-                if self.devices[u].kind == "g":
+                if self.devices[u].kind == "g" and (not public or u in public):
                     ends.append((dist[u], u, None))
                 continue
             if dst[0] == u:

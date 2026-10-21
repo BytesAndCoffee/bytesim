@@ -168,6 +168,10 @@ class CloningMixin(NetworkBase):
                 self.stp_priority[new] = self.stp_priority[old]
             if old in self.dhcp_off:
                 self.dhcp_off.add(new)
+            if old in self.nat_off:
+                self.nat_off.add(new)
+            if old in self.nat_hard:
+                self.nat_hard.add(new)
             for p in range(1, self.devices[old].nports + 1):
                 ifc = self.ifaces.get(f"{old}:{p}")
                 if ifc is None:

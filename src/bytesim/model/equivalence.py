@@ -56,6 +56,14 @@ def canonical(net: Network) -> dict[str, Any]:
         "dhcp_off": frozenset(net.dhcp_off),
         "lags": frozenset(net.lags),
         "mlag_domains": frozenset(net.mlag_domains),
+        "internet": net.internet,
+        "nat_off": frozenset(net.nat_off),
+        "nat_hard": frozenset(net.nat_hard),
+        "overlays": {t: (v["net"], frozenset(v["hosts"].items()), v.get("coord"), v.get("exit"), v.get("lan", False),
+                         tuple(v.get("routes", [])),        # order decides which router wins for a network
+                         frozenset(map(tuple, v["acl"])) if "acl" in v else None)
+                     for t, v in net.overlay_state().items()},
+        "relays": tuple(net.relays),
         "ifaces": ifaces,
         "devices_down": frozenset(d.id for d in net.devices.values() if not d.up),
         "cables_down": Counter(link_key(l.a, l.pa, l.b, l.pb, l.role) for l in net.links if not l.up),

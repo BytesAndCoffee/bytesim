@@ -105,6 +105,18 @@ class _Builder:
             net.stp_priority[dev.id] = int(spec["priority"])
         if dev.kind in "rg" and not _onoff(spec.get("dhcp", True), f"{where}.dhcp"):
             net.dhcp_off.add(dev.id)
+        if "nat" in spec:
+            if dev.kind != "g":
+                raise NetError(f"{where}.nat: only gateways run NAT")
+            words = spec["nat"] if isinstance(spec["nat"], list) else [spec["nat"]]
+            for w in words:                       # YAML reads a bare on/off as true/false
+                w = {True: "on", False: "off"}.get(w, str(w).lower()) if isinstance(w, bool) else str(w).lower()
+                if w not in ("on", "off", "easy", "hard"):
+                    raise NetError(f"{where}.nat: use on, off, easy or hard (or a list, e.g. [off, hard])")
+                if w == "off":
+                    net.nat_off.add(dev.id)
+                elif w == "hard":
+                    net.nat_hard.add(dev.id)
         mode = spec.get("interfaces", self.default_ifaces.get(dev.kind))
         if mode is not None:
             if mode not in ("dhcp", "adhoc", "none", "auto"):
@@ -377,7 +389,80 @@ class _Builder:
             if problem:
                 raise NetError(f"{where}: {problem}")
             net.lags.add(frozenset((a, b)))
+        self._internet_and_overlays(spec)
         return net
+
+    def _internet_and_overlays(self, spec: dict) -> None:
+        """The public internet, relays and overlays (after groups and cables exist)."""
+        net = self.net
+        if spec.get("internet") is not None:
+            g = str(spec["internet"]).lower()
+            if g not in net.groups:
+                raise NetError(f"internet: {g!r} isn't a group")
+            net.internet = g
+
+        def devices(ref: Any, where: str) -> list[str]:
+            out = []
+            for item in ref if isinstance(ref, list) else [ref]:
+                for d, _ in self._resolve(item, {}, where):
+                    if net.devices[d].kind == "s":
+                        if str(item).lower() in net.groups:
+                            continue                  # a group's switches are skipped
+                        raise NetError(f"{where}: {d} is a switch")
+                    if d not in out:
+                        out.append(d)
+            return out
+
+        net.relays = devices(spec.get("relays") or [], "relays")
+        for ov, t in (spec.get("overlays") or {}).items():
+            where = f"overlays.{ov}"
+            ov = str(ov).lower()
+            if not GROUP_NAME.match(ov) or REF.match(ov):
+                raise NetError(f"{where}: an overlay name starts with a letter and doesn't look like a device id")
+            t = t or {}
+            unknown = set(t) - {"net", "members", "hosts", "coord", "exit", "lan", "routes", "acl"}
+            if unknown:
+                raise NetError(f"{where}: unknown key {sorted(unknown)[0]!r}")
+            net.new_overlay(ov, int(t["net"]) if "net" in t else None)
+            members = devices(t.get("members") or [], f"{where}.members")
+            pinned = {}
+            for d, h in (t.get("hosts") or {}).items():
+                d = str(d).lower()
+                if d not in members:
+                    raise NetError(f"{where}.hosts: {d} isn't a member")
+                pinned[d] = int(h)
+            for d in [m for m in members if m in pinned] + [m for m in members if m not in pinned]:
+                net.join_overlay(ov, d, pinned.get(d))
+            net.overlays[ov]["members"] = members        # keep the file's order
+            state = net.overlays[ov]
+            for key in ("coord", "exit"):
+                if t.get(key) is not None:
+                    d = devices(t[key], f"{where}.{key}")
+                    if len(d) != 1:
+                        raise NetError(f"{where}.{key}: one device")
+                    if key == "exit" and d[0] not in members:
+                        raise NetError(f"{where}.exit: {d[0]} isn't a member")
+                    state[key] = d[0]
+            if _onoff(t.get("lan", False), f"{where}.lan"):
+                state["lan"] = True
+            if t.get("routes"):
+                routes = devices(t["routes"], f"{where}.routes")
+                if outside := [d for d in routes if d not in members]:
+                    raise NetError(f"{where}.routes: {outside[0]} isn't a member")
+                state["routes"] = routes
+            if "acl" in t:
+                rules = []
+                for n, rule in enumerate(t["acl"] or []):
+                    if not (isinstance(rule, list) and len(rule) == 2):
+                        raise NetError(f"{where}.acl[{n}]: a pair [from, to], e.g. [c1, c3] or [site1, internet]")
+                    ends = []
+                    for x in rule:
+                        x = str(x).lower()
+                        if x not in ("*", "internet") and x not in net.groups:
+                            x = self._resolve(x, {}, f"{where}.acl[{n}]")[0][0]
+                        ends.append(x)
+                    rules.append(ends)
+                state["acl"] = rules
 
 
 def load_topology(text: str) -> Network:
@@ -440,6 +525,9 @@ def dump_topology(net: Network, pin_ports: bool = False) -> str:
                 extra["priority"] = net.stp_priority[d.id]
             if d.id in net.dhcp_off:
                 extra["dhcp"] = "off"
+            nat = [w for w, on in (("off", d.id in net.nat_off), ("hard", d.id in net.nat_hard)) if on]
+            if nat:
+                extra["nat"] = nat[0] if len(nat) == 1 else f"[{', '.join(nat)}]"
             modes = {i.mode for p in range(1, d.nports + 1) if (i := net.ifaces.get(f"{d.id}:{p}"))}
             if d.kind == "c" and modes and modes != {"dhcp"} and len(modes) == 1 and "static" not in modes:
                 extra["interfaces"] = modes.pop()
@@ -464,6 +552,31 @@ def dump_topology(net: Network, pin_ports: bool = False) -> str:
         for pair in sorted(net.lags, key=lambda p: sorted(p, key=net._end_order)):
             a, b = sorted(pair, key=net._end_order)
             out.append(f"  - [{a}, {b}]")
+    if net.internet:
+        out += ["", f"internet: {net.internet}"]
+    if net.relays:
+        out += ["", f"relays: [{', '.join(net.relays)}]"]
+    state = net.overlay_state()
+    if state:
+        out += ["", "overlays:"]
+        for ov in sorted(state, key=lambda t: state[t]["net"]):
+            t = state[ov]
+            ordered = sorted(t["members"], key=t["hosts"].get)
+            # Host numbers are written only where joining in order wouldn't give them.
+            pinned = {d: h for d, h in t["hosts"].items() if ordered.index(d) + 1 != h}
+            out += [f"  {ov}:", f"    net: {t['net']}", f"    members: [{', '.join(ordered)}]"]
+            if pinned:
+                out.append("    hosts: {" + ", ".join(f"{d}: {h}" for d, h in pinned.items()) + "}")
+            for key in ("coord", "exit"):
+                if t.get(key):
+                    out.append(f"    {key}: {t[key]}")
+            if t.get("lan"):
+                out.append("    lan: on")
+            if t.get("routes"):
+                out.append(f"    routes: [{', '.join(t['routes'])}]")
+            if "acl" in t:
+                rules = list(dict.fromkeys(map(tuple, t["acl"])))
+                out.append("    acl: [" + ", ".join(f"['{a}', '{b}']" for a, b in rules) + "]")
     return "\n".join(out) + "\n"
 
 

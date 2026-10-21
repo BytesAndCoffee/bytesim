@@ -181,5 +181,68 @@ def mlag() -> tuple[Network, str]:
                  "[cyan]fail s15[/] (a single rack switch cuts off its rack), [cyan]mping all all[/]")
 
 
+def internet() -> tuple[Network, str]:
+    """Three sites behind NAT gateways, joined only through the public internet.
+
+    g1 and g2 are the ISP edge, peering over an exchange switch s1: the group ``isp``,
+    declared the internet. c7 is a public server on g2's network, behind no NAT. Each
+    site's gateway (g3–g5) has a WAN port into the ISP and runs NAT, so sites reach the
+    internet and the server, but not each other's insides."""
+    net = Network()
+    for _ in range(2):
+        net.add("g", 4)                         # g1, g2: the ISP
+    for _ in range(3):
+        net.add("g", 2)                         # g3–g5: one NAT gateway per site
+    for _ in range(4):
+        net.add("s", 4)                         # s1: the internet exchange; s2–s4: one LAN switch per site
+    for _ in range(7):
+        net.add("c", 1)                         # c1–c6: two computers per site; c7: a public server
+    net.connect("g1", None, "s1", None)
+    net.connect("g2", None, "s1", None)
+    net.connect("g2", None, "c7", None)
+    net.group_add("isp", ["g1", "g2", "s1"])
+    net.group_add("hosting", ["c7"])            # a server hosted on the ISP's network, outside every NAT
+    net.internet = "isp"
+    for i, up in enumerate(("g1", "g1", "g2")):
+        gw, sw = f"g{3 + i}", f"s{2 + i}"
+        hosts = [f"c{1 + 2 * i}", f"c{2 + 2 * i}"]
+        net.connect(up, None, gw, None)          # the site's WAN port: port 1
+        net.connect(gw, None, sw, None)
+        for c in hosts:
+            net.connect(c, None, sw, None)
+        net.group_add(f"pcs{1 + i}", hosts)      # a subgroup, so they get their own row
+        net.group_add(f"lan{1 + i}", [sw, f"pcs{1 + i}"])
+        net.group_add(f"site{1 + i}", [gw, f"lan{1 + i}"])
+    return net, ("[green]internet demo loaded[/]: sites 1–3 sit behind NAT gateways g3–g5; the ISP "
+                 "(g1, g2) and a public server c7 are the internet.\n  try [cyan]ping c1 c7[/] (out through NAT), "
+                 "[cyan]ping c1 c3[/] (dropped: site 2 is behind NAT), [cyan]internet[/], "
+                 "[cyan]nat g4 off[/], [cyan]ping c1 c3[/], [cyan]mping all all[/]")
+
+
+def overlay() -> tuple[Network, str]:
+    """The internet demo plus an overlay, ol: one computer per site and the public server c7.
+
+    c7 also runs the coordination server and c8 (also public) a relay. Sites 2
+    and 3 have hard NAT, so c3 and c5 can't hole-punch to each other and relay via c8;
+    every other pair goes direct."""
+    net, _ = internet()
+    c8 = net.add("c", 1).id                     # c8: a second public box, for the relay
+    net.connect("g2", None, c8, None)
+    net.group_add("hosting", [c8])
+    net.nat_hard |= {"g4", "g5"}
+    net.relays = [c8]
+    net.new_overlay("ol", 100)["coord"] = "c7"
+    for d in ("c1", "c3", "c5", "c7"):
+        net.join_overlay("ol", d)
+    return net, ("[green]overlay demo loaded[/]: c1, c3, c5 (behind NAT; sites 2 and 3 hard NAT) and the public "
+                 "server c7 are in overlay ol; c7 coordinates, c8 relays.\n  try [cyan]ping c1 c3@ol[/] (direct), "
+                 "[cyan]ping c3 c5@ol[/] (relayed via c8), [cyan]overlay ol[/], [cyan]fail c8[/], "
+                 "[cyan]fail c7[/] then [cyan]ping c1 c3@ol[/] (still works) and [cyan]overlay ol c2[/] (can't join)\n"
+                 "  then [cyan]overlay ol advertise c3[/] + [cyan]ping c1 c4[/] (subnet router), [cyan]overlay ol exit=c7[/] + "
+                 "[cyan]ping c1 internet[/] (exit node), [cyan]acl ol allow c1 c3[/] (rules on: the rest is denied)")
+
+
 DEMOS: dict[str, Callable[[], tuple[Network, str]]] = {"basic": basic, "ha": ha, "loop": loop, "core": core,
-                                                          "mlag": mlag}
+                                                          "mlag": mlag,
+                                                          "internet": internet,
+                                                          "overlay": overlay}

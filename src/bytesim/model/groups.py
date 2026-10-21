@@ -116,6 +116,9 @@ class GroupsMixin(NetworkBase):
             self.group_layouts.pop(name, None)
             self.mlag_domains.discard(name)
             self.lags = {p for p in self.lags if name not in p}
+            if self.internet == name:
+                self.internet = None
+            self._prune_acl()
             self._drop_from_groups([])
             return len(kids)
         ids = [m if m in self.groups else self.get(m).id for m in members]
@@ -141,10 +144,21 @@ class GroupsMixin(NetworkBase):
         self.clusters = {c: pol for c, pol in self.clusters.items() if c in self.groups}
         self.cluster_modes = {c: m for c, m in self.cluster_modes.items() if c in self.clusters}
         self.group_layouts = {g: m for g, m in self.group_layouts.items() if g in self.groups}
+        if self.internet not in self.groups:
+            self.internet = None
+        self._prune_acl()
         gone = self.mlag_domains - set(self.groups)
         if gone:
             self.mlag_domains -= gone
             self.lags = {p for p in self.lags if not p & gone}
+
+    def _prune_acl(self) -> None:
+        """Access rules that name a group which no longer exists go with it (an emptied
+        list still means rules are on, so nothing becomes allowed by accident)."""
+        names = set(self.devices) | set(self.groups) | {"*", "internet"}
+        for t in self.overlays.values():
+            if "acl" in t:
+                t["acl"] = [r for r in t["acl"] if set(r) <= names]
 
     def group_bounds(self, name: str) -> tuple[int, int, int, int]:
         """Frame rectangle (x0, y0, x1, y1), inclusive. Outer groups get wider margins
