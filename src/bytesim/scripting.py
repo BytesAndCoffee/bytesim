@@ -25,6 +25,8 @@ from .tui.commands.registry import collect
 from .tui.commands.switching import SwitchingCommands
 from .tui.commands.topology import TopologyCommands
 from .tui.commands.traffic import TrafficCommands
+from .tui.commands.wan import WanCommands
+from .tui.commands.overlay import OverlayCommands
 
 
 class _Screen:
@@ -60,7 +62,7 @@ class _Screen:
 
 
 class ScriptRunner(ConsoleCommands, TopologyCommands, GroupCommands, AddressCommands, TrafficCommands, NamingCommands,
-                   SwitchingCommands, Interpreter):
+                   SwitchingCommands, WanCommands, OverlayCommands, Interpreter):
     """A headless ByteSim: feed it commands, read back ``net``."""
 
     def __init__(self, network: Network | None = None, *, trace: bool = False,

@@ -1,5 +1,33 @@
 # Changelog
 
+## Unreleased
+
+### The internet and NAT
+- `internet <group>` declares the public internet. Gateways cabled to it (their
+  WAN ports are those with the shortest cabled path to it) run NAT: traffic goes
+  out as the gateway's WAN address, unsolicited inbound traffic is dropped with
+  the reason, and replies get back in. Works through private uplink routers and
+  double NAT; a second gateway doesn't turn a LAN into a WAN.
+- `nat <gateway…> on|off|easy|hard`; NAT drops are their own traffic statistic.
+- `demo internet`: three sites behind NAT, an ISP and a public server.
+
+### Overlay networks
+- `overlay <name> <devices|groups…>`: mesh-VPN overlays. Members
+  get stable overlay addresses (`(100,n)`, `c3@ol`) and reach each other through
+  NAT by hole punching, shown hop by hop with the WireGuard endpoints.
+- Easy and hard NAT, relays (`relay <device>`) for pairs that can't go direct,
+  and a coordination server (`coord=`) that new members must reach to join while
+  existing tunnels survive it being down.
+- Subnet routers (`overlay <name> advertise <member>`), an exit node
+  (`exit=<member>`, with `lan=on` to keep own-site traffic local) and access
+  rules (`acl <overlay> allow <from> <to>`, deny by default once any exist).
+- `overlay <name>` lists members with their endpoint and NAT situation, and every
+  pair's connection (direct, relayed, denied) for small overlays;
+  `overlay <name> peers <member>` shows one member's view.
+- Overlay targets in multicast ping (`ping c1 all@ol`, replies come back through
+  the tunnel) and in graph mode.
+- `demo overlay`; all of it is kept by saves, undo, export scripts and YAML topologies.
+
 ## 0.3.2 (2026-10-20)
 
 - `demo mlag` (`bytesim --demo mlag`): a seven-tier data centre (edge gateway,

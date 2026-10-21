@@ -1,7 +1,7 @@
 """Addresses as (network, 8-bit host); router autoconfig, DHCP and ad-hoc."""
 from __future__ import annotations
 
-from ..constants import HOST_MAX, POOL, VIP_HOST
+from ..constants import HOST_MAX, POOL, OVERLAY_NETS, VIP_HOST
 from .base import NetworkBase
 from .layer2 import route_memo, structure_memo
 from .types import Iface, NetError, fmt
@@ -44,7 +44,7 @@ class AddressingMixin(NetworkBase):
 
     def new_net(self) -> int:
         used = {i.net for i in self.ifaces.values() if i.net is not None}
-        return next(n for n in range(1, 10**6) if n not in used)
+        return next(n for n in range(1, 10**6) if n not in used and n not in OVERLAY_NETS)
 
     def autoconf_routers(self) -> list[str]:
         """Give every cabled router/gateway port an address on its local network,

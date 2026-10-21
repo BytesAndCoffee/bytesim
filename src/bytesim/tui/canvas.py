@@ -517,6 +517,8 @@ class NetCanvas(Widget, can_focus=True):
             st = group_color(g)
             if g in net.mlag_domains:
                 label = f" {g} · MLAG "
+            if g == net.internet:
+                label, st = f" ☁ {g} · internet ", "magenta"
             if g in net.clusters and not self.app.graph:  # type: ignore[attr-defined]
                 ha = net.ha_state(g)
                 label = f" {g} · HA {ha['level']} " if ha["level"] != "ok" else f" {g} · HA "
@@ -593,6 +595,11 @@ class NetCanvas(Widget, can_focus=True):
         """Short address caption drawn under computers and above gateways."""
         net = self.net
         if d.kind == "g":
+            if d.id in net.public():              # its frame already says internet
+                return "", "", 0
+            if net.wan_ports(d.id):               # its uplink is drawn: say what it does instead
+                label = ("hard NAT" if d.id in net.nat_hard else "NAT") if net.natting(d.id) else "no NAT"
+                return label, "magenta", d.y - 1
             return "☁ internet", "magenta", d.y - 1
         if d.kind != "c" or self.app.graph:  # type: ignore[attr-defined]
             return "", "", 0

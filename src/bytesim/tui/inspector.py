@@ -94,7 +94,20 @@ def render_inspector(net: Network, sel: str | None, selected_group: str | None,
                    + (f"  [{group_color(g)}]{' › '.join(chain)}[/]" if g else ""))
         if d.kind in "rg" and not graph:
             out.append("DHCP server " + ("[red]off[/]" if d.id in net.dhcp_off else "[green]on[/]"))
-        if d.kind == "g":
+        for ov, a in net.ol_addrs(d.id):
+            out.append(f"[#d7af5f]⌁ overlay {ov}[/] {fmt(a)}  [dim](ping … {d.id}@{ov})[/]")
+        if d.id in net.relays:
+            out.append("[#d7af5f]⇄ relay[/] [dim]for overlay peers that can't go direct[/]")
+        for ov in sorted(t for t, v in net.overlays.items() if v.get("coord") == d.id):
+            out.append(f"[#d7af5f]⌁ coordination server[/] for overlay {ov}")
+        if d.kind == "g" and (wan := net.wan_ports(d.id)):
+            ports = ", ".join(f"{d.port_name(p)} {fmt(net.addr_of((d.id, p)))}" for p in sorted(wan))
+            kind = "hard" if d.id in net.nat_hard else "easy"
+            out.append(f"[magenta]☁ WAN {ports}[/] · " + (f"{kind} NAT: the inside isn't reachable from the internet"
+                                                       if net.natting(d.id) else "[yellow]NAT off[/]"))
+        elif d.kind == "g" and d.id in net.public():
+            out.append(f"[magenta]☁ part of the internet ({net.internet})[/]")
+        elif d.kind == "g":
             out.append("[magenta]☁ uplink to the internet[/]")
         for p in range(1, d.nports + 1):
             l = net.link_on(d.id, p)

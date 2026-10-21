@@ -856,6 +856,130 @@ The split policy still decides what happens when the control links fail:
 standby `r2` takes over), `fail r3:3` (that site's other router carries the
 traffic), and `traffic on 6` (the active core router's cables get busy).
 
+## The internet, NAT and overlays
+
+Gateways normally lead to an implicit internet. You can also build the internet
+yourself, put sites behind NAT, and connect them with a mesh VPN that crosses it.
+
+### The internet and NAT
+
+```text
+internet isp           the group isp (ISP gateways, routers, public servers) is the internet
+internet               show it: which gateways face it, their WAN ports and NAT
+internet off           back to an ordinary group
+nat g4 off|on          NAT on a gateway that faces the internet (on by default)
+nat g4 hard|easy       the kind of NAT (easy by default)
+```
+
+A gateway's **WAN ports** are its ports with the shortest cabled path to the
+internet group. An uplink through a private router or through another NAT
+counts. A LAN that happens to reach the internet through a second gateway
+doesn't. Failures don't change which side is which.
+
+A gateway with a WAN port runs **NAT**:
+- **Going out:** traffic from its LAN leaves with the gateway's WAN address. The
+  trace says `NAT at g3: (6,10) leaves as (2,2)`.
+- **Coming in:** a packet arriving on a WAN port isn't forwarded onto the LAN
+  unless it's a reply to something that went out. Otherwise it's dropped,
+  with the reason: `dropped by g4's NAT: unsolicited inbound traffic …`.
+- **Behind another NAT** (double NAT), each NAT translates in turn.
+
+With an internet declared, `ping c1 internet` has to reach one of its gateways.
+Random traffic counts NAT drops separately.
+
+`bytesim --demo internet` has three sites behind NAT gateways (g3–g5) and an
+ISP (g1, g2) with a public server, c7. `ping c1 c7` works, `ping c1 c3` is
+dropped by site 2's NAT, and `nat g4 off` opens site 2.
+
+### Overlays
+
+An overlay is a mesh VPN, modeled on how Tailscale works, though not a fully
+faithful implementation of it. Its members reach each other through every NAT
+on addresses that don't depend on cabling.
+
+```text
+overlay ol c1 c3 c5 c7          make overlay ol (or add members); a group adds its devices
+overlay ol c4 host=9            choose a member's overlay host number
+overlay ol remove c3            take members out
+overlay ol                      members, their real endpoints, NAT and (up to 10 members) every peer
+overlay ol peers c3             how one member connects to each of the others
+overlay off ol                  delete the overlay
+ping c1 c3@ol                   to c3 over the overlay (or its overlay address: ping c1 (100,2))
+ping c1 all@ol                  every other member, as a multicast ping
+```
+
+- **Addresses:** each overlay has its own network, 100 for the first, then
+  101 and so on (100–109 are reserved for overlays). A member keeps its
+  overlay host number until it leaves, and a new member takes the lowest free
+  one. `net=` picks the network when you create an overlay.
+- **Tunnels:** a packet to `c3@ol` travels as WireGuard between the two
+  members' real interfaces, over the normal route. The log shows the inner
+  packet (`PING (100,1) → (100,2)`) and the trace shows both.
+
+### Direct, relayed and the coordination server
+
+```text
+overlay ol coord=c7             members register through c7
+relay c8                         c8 runs a relay (relay off c8, relay to list)
+```
+
+- **Direct:** a pair connects directly by hole punching: each peer sends
+  first, so each NAT treats the other's packets as replies. This works
+  unless *both* ends are behind hard NAT.
+- **Relayed:** when both are, the traffic goes through the nearest relay
+  that both can reach. Each peer keeps an outbound connection to the relay,
+  so no NAT is in the way.
+- **The coordination server:** a new member must be able to reach it to join.
+  Packets never pass through it, so when it's down, existing tunnels keep
+  working and only joining stops.
+
+`bytesim --demo overlay` adds an overlay to the internet demo. Sites 2 and 3
+have hard NAT, c7 coordinates and c8 relays:
+
+| Try | What happens |
+|---|---|
+| `ping c1 c3@ol` | direct |
+| `ping c3 c5@ol` | relayed via c8 |
+| `fail c8` | only c3 ↔ c5 breaks |
+| `fail c7`, then `overlay ol c2` | existing tunnels keep working; c2 can't join |
+
+### Subnet routers and exit nodes
+
+```text
+overlay ol advertise c3         c3 carries members onto its own LAN (unadvertise to stop)
+overlay ol exit=c7              members' internet and other non-local traffic leaves through c7
+overlay ol lan=on               with an exit node, own-site traffic stays local
+```
+
+- **A subnet router** advertises the networks it's on. A member can then reach
+  devices there that aren't in the overlay with a plain `ping c1 c4`: the
+  packet tunnels to c3, which forwards it with its own address (source NAT).
+- **An exit node** carries everything that isn't on the member's own networks.
+  By default that includes other networks in the member's
+  own site. They're then unreachable, because the exit node can't get back
+  through the site's NAT. `lan=on` keeps them local.
+- **Who can use them:** only members, and traffic on a member's own network
+  never goes through the overlay. A subnet route wins over the exit node.
+
+### Access rules
+
+```text
+acl ol                          list the rules
+acl ol allow c1 c3              let c1 start traffic to c3
+acl ol allow site1 internet     let site1's members use the exit node
+acl ol remove 1                 remove rule 1
+acl ol clear                    no rules: everything allowed (the default)
+acl ol none                     rules on, nothing allowed
+```
+
+- **What a rule names:** a device, a group (its devices), `*` (every device)
+  or `internet`. `*` doesn't include the internet: it has to be named.
+- **Deny by default:** once an overlay has rules, only what a rule allows gets
+  through. Emptying the list keeps denying; only `acl ol clear` allows
+  everything again. Replies are always let back.
+- **What rules cover:** member-to-member traffic, subnet destinations, and use
+  of the exit node.
+
 ## Graph mode
 
 ```text
@@ -867,7 +991,8 @@ In graph mode, ping, unicast and multicast take the shortest cable path.
 Computers still never forward traffic for others, and failures, control
 cables, STP blocking and storms still apply (only `broadcast` sets off a storm
 here, since there is no ARP). Address labels are hidden, automatic DHCP is off, and
-switches don't learn MACs.
+switches don't learn MACs. `ping c1 c3@ol` takes the cable path to c3, once
+overlay membership and access rules allow it; NAT doesn't apply.
 
 ## Undo
 
@@ -963,7 +1088,14 @@ them, and a group name on its own selects the group.
 | `renumber [auto] bfs\|dfs [root]`, `renumber off` | `rename` | renumber ids in traversal order |
 | `layout [layered\|tree\|circular\|grid\|compact\|compact-layered] [auto\|horizontal\|vertical]`, `layout list` | `auto`, `arrange` | layout and/or flow direction, in either order; no argument reuses current settings; `list` shows choices |
 | `list` | `ls` | devices, cables, groups |
-| `demo [basic\|ha\|loop\|core\|mlag]` | | load a sample network |
+| `internet [<group>\|off]` | | declare or show the public internet |
+| `nat <gateway…> on\|off\|easy\|hard`, `nat` | | NAT on gateways that face the internet |
+| `overlay [<name>]`, `overlay <name> <device\|group…> [host=]`, `overlay <name> remove …`, `overlay off <name>` | | create overlays, add or remove members, show status |
+| `overlay <name> peers <member>`, `overlay <name> advertise\|unadvertise <member…>` | | one member's connections; subnet routers |
+| `overlay <name> coord=<device>\|none exit=<member>\|none lan=on\|off net=<id>` | | coordination server, exit node, LAN access, network |
+| `relay [off] <device…>`, `relay` | | relays for overlay pairs that can't go direct |
+| `acl <overlay> [allow <from> <to>\|remove <n>\|clear\|none]` | | access rules |
+| `demo [basic\|ha\|loop\|core\|mlag\|internet\|overlay]` | | load a sample network |
 | `save [file]`, `load [file]` | `open` | save files; `load` also reads topologies |
 | `export <file.yaml> [ports]` | | write a declarative topology |
 | `export script [readable\|shortest\|explicit] [file]` | | the commands that rebuild the network (verified) |
@@ -1006,3 +1138,9 @@ ByteSim models the behaviours above and deliberately skips the rest:
 - STP converges instantly, and every hop's ARP is a fresh broadcast (there's no
   ARP cache).
 - Ping times are random. Hop counts and TTLs are real.
+- NAT decides only what gets through. Addresses stay globally unique (there are
+  no overlapping private ranges), and there are no port forwards.
+- Hole punching works unless both ends are behind hard NAT; real mesh VPNs
+  sometimes get through even then (port mapping, port guessing).
+- An overlay has one exit node, used by every member, and access rules have no
+  ports, protocols or tags.

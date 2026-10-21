@@ -66,6 +66,18 @@ HELP = """\
   [cyan]cluster[/] <name> <routers…> \\[policy=none|quorum|witness] \\[mode=active-active|active-passive]
                                     HA pair/group sharing gateway host 254; active-passive: only the active forwards
   [cyan]cluster[/] <name>  ·  [cyan]clusters[/]  ·  [cyan]uncluster[/] <name>  ·  [cyan]demo ha[/]
+[b]Internet and NAT[/]
+  [cyan]internet[/] <group> | off  ·  [cyan]internet[/]   that group is the public internet; gateways cabled to it face it
+  [cyan]nat[/] <gateway…> on|off|easy|hard  ·  [cyan]demo internet[/]   NAT (on, easy by default) drops unsolicited inbound traffic
+  [cyan]overlay[/] <name> <device|group…> \\[host=n] · [cyan]overlay[/] <name> remove … · [cyan]overlay off[/] <name> · [cyan]overlay[/] \\[<name>]
+                                    overlay addresses (100,n) that reach each other through NAT: [cyan]ping c1 c3@<name>[/] · [cyan]ping c1 all@<name>[/]
+  [cyan]overlay[/] <name> peers <member>  ·  [cyan]demo overlay[/]   how one member connects to each of the others
+  [cyan]overlay[/] <name> coord=<device>|none · [cyan]relay[/] <device…> · [cyan]relay off[/] <device…>
+                                    joining needs the coordination server; two hard NATs go through a relay
+  [cyan]overlay[/] <name> advertise|unadvertise <member…> · [cyan]overlay[/] <name> exit=<member>|none \\[lan=on|off]
+                                    subnet routers carry members onto their LAN; an exit node carries the rest
+  [cyan]acl[/] <overlay> · [cyan]acl[/] <overlay> allow <from> <to> · [cyan]acl[/] <overlay> remove <n> | clear | none
+                                    from/to: device, group, * or internet; once any rule exists, the rest is denied
   [cyan]undo[/] \\[n] · [cyan]redo[/] \\[n] · [cyan]history[/]   step back through changes (u / U on the canvas)
 [b]Canvas keys[/]  arrows move (shift = x4) · tab cycle · a arrange · x delete · u undo · U redo
   hjkl / drag background / wheel pan · drag a box to move · v show/hide addresses · enter or : → command line"""

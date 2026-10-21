@@ -64,6 +64,8 @@ def drop_reason(message: str) -> str:
     m = message.lower()
     if "storm" in m:
         return "storm"
+    if "nat" in m and "unsolicited" in m:
+        return "NAT"
     if "no address" in m:
         return "no address"
     if " is down" in m:

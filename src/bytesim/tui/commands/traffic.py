@@ -18,6 +18,8 @@ from .registry import command
 
 class TrafficCommands(CommandHost):
     INTERNET = ("internet", "inet", "wan")
+    _overlay_src: tuple[int, int] | None = None   # set by _plan: the inner source of a tunnelled packet
+    _carried = False                              # set by _plan: the overlay carried the last plan
     SPEEDS = {"slow": 0.5, "normal": 1.0, "fast": 3.0}
     BULK_PAIRS = 128
 
@@ -158,19 +160,29 @@ class TrafficCommands(CommandHost):
             raise NetError(f"{did} is a switch (layer 2): it can't originate addressed traffic")
         return did
 
-    def _plan(self, src: str, tok: str) -> tuple[str, list[tuple[str, int]], list[Leg] | None, bool]:
+    def _plan(self, src: str, tok: str, reply: bool = False) -> tuple[str, list[tuple[str, int]], list[Leg] | None, bool]:
         """Work out how a packet gets from src to tok: (label, device path, legs, to-internet).
 
         In graph mode it's the shortest cable path; in address mode it follows
-        networks and gateways, and legs records each layer-2 hop."""
+        networks and gateways, and legs records each layer-2 hop. A ``reply`` belongs
+        to a flow the other side started, so NAT lets it back in."""
         net = self.net
         internet = tok.lower() in self.INTERNET
         if self.graph:
             if ADDR.match(tok):
                 raise NetError("graph mode ignores addresses: use device ids (or `mode addr`)")
+            if "@" in tok:                        # pure connectivity: the tunnel is just the cable path
+                ov, member = self._overlay_dst(tok)  # type: ignore[misc]
+                for d in (src, member):
+                    if d not in net.overlay_members(ov):
+                        raise NetError(f"{d} is not in overlay {ov}")
+                if not net.acl_allows(ov, src, member):
+                    raise NetError(f"overlay {ov}'s access rules don't let {src} reach {member}")
+                tok = member
             tree = net.tree(src)
             if internet:
-                dst = next((d for d in tree if net.devices[d].kind == "g"), None)
+                public = net.public()
+                dst = next((d for d in tree if net.devices[d].kind == "g" and (not public or d in public)), None)
                 if dst is None:
                     raise NetError(f"no gateway reachable from {src}")
                 label = "internet"
@@ -183,14 +195,28 @@ class TrafficCommands(CommandHost):
                                + self.storm_hint(src, dst))  # type: ignore[attr-defined]
             return label, path, None, internet
         net.notes.clear()
+        self._overlay_src, self._carried = None, False
+        if (overlay := self._overlay_dst(tok)) is not None:
+            return self._plan_tunnel(src, *overlay)
         storm = None
         with net.remembering():
             label, cands = self._resolve_dst(tok)
+            for c in (cands if cands is not None else [None]) if net.overlays and not reply else []:
+                if (via := net.overlay_via(src, c)) is not None:     # a subnet router or exit node
+                    legs, notes = net.routed_via(src, c, *via)
+                    net.notes.extend(notes)
+                    self._carried = True
+                    if c is not None:
+                        self._last_dst = c
+                    return label, self._flatten(legs), legs, c is None
             try:
                 legs = self._best_route(src, cands)
             except NetError as e:
                 hint = self.storm_hint(src, *(c[0] for c in cands or []))  # type: ignore[attr-defined]
                 raise NetError(f"{e}{hint}") from None
+            if not reply and (blocked := net.nat_block(legs)):
+                raise NetError(blocked)
+            net.notes.extend(net.nat_notes(legs))
             # Every hop starts with ARP. Share structural indexes with routing,
             # but leave the scope before setting off a storm (a model mutation).
             for a, b, _ in legs:
@@ -203,6 +229,28 @@ class TrafficCommands(CommandHost):
             self.set_off_storm(fl, f"the ARP for {fmt(net.addr_of(b))} from {self._ifname(a)}")  # type: ignore[attr-defined]
             raise NetError(f"{self._ifname(a)} never got an ARP reply: its broadcast set off a storm")
         return label, self._flatten(legs), legs, internet
+
+    def _overlay_dst(self, tok: str) -> tuple[str, str] | None:
+        """(overlay, member) for c3@ol or an overlay address; None for ordinary destinations."""
+        net = self.net
+        if "@" in tok:
+            dev, _, ov = tok.partition("@")
+            if ov.lower() not in net.overlays:
+                raise NetError(f"no overlay {ov or '(none named)'} (overlay <name> <devices…> makes one)")
+            return ov.lower(), net.get(self._ref(dev)[0]).id
+        if (addr := self._parse_addr(tok)) is not None and (hit := net.ol_resolve(addr)):
+            return hit
+        return None
+
+    def _plan_tunnel(self, src: str, ov: str, dst: str) -> tuple[str, list[tuple[str, int]], list[Leg], bool]:
+        """A packet to an overlay address: WireGuard between the members' real interfaces."""
+        net = self.net
+        with net.remembering():
+            legs, notes = net.tunnel(src, dst, ov)
+        net.notes.extend(notes)
+        self._last_dst = legs[-1][1] if legs else (dst, 1)
+        self._overlay_src, self._carried = net.ol_addr(ov, src), True
+        return f"{fmt(net.ol_addr(ov, dst))} {dst}", self._flatten(legs), legs, False
 
     def _learn(self, legs: list[Leg] | None, both_ways: bool = False) -> None:
         for a, b, p in legs or []:
@@ -221,7 +269,7 @@ class TrafficCommands(CommandHost):
         if legs is None:
             self.log_msg(f"[b {color}]{kind}[/] {src} → {label}: {chain}")
             return
-        frm = fmt(net.addr_of(legs[0][0]))
+        frm = fmt(self._overlay_src or net.addr_of(legs[0][0]))
         to = "internet" if internet else label.split()[0] if label.startswith("(") else fmt(net.addr_of(self._last_dst))
         self.log_msg(f"[b {color}]{kind}[/] {frm} → {to} [dim]({src} → {label})[/]: {chain}")
         for a, b, _ in legs:
@@ -238,13 +286,14 @@ class TrafficCommands(CommandHost):
     @command("ping", "tracert", "traceroute")
     def cmd_ping(self, args: list[str], opts: dict[str, str]) -> None:
         if len(args) >= 2 and (args[0].lower() in ("all", "*") or len(args) > 2 or args[1].lower() in ("all", "*")
-                               or args[1].lower() in self.net.groups):
+                               or args[1].lower() in self.net.groups or args[1].lower().split("@")[0] in ("all", "*")):
             self.cmd_mping(args, opts)
             return
         if len(args) != 2:
             raise NetError("usage: ping <src> <id|(net,host)|internet|group|all> [...]")
         src = self._src(args[0])
-        if args[1].lower() not in self.INTERNET and self._ref_or_none(args[1]) == src:
+        if args[1].lower() not in self.INTERNET and (
+                self._ref_or_none(args[1]) == src or (self._overlay_dst(args[1]) or ("", ""))[1] == src):
             self.log_msg(f"{src}: reply from self (loopback)")
             return
         try:
@@ -350,11 +399,24 @@ class TrafficCommands(CommandHost):
             return [d.id for d in devices if d.kind == "c"]
         return [d.id for d in devices if self.graph or (d.kind != "s" and self.net.addressed(d.id))]
 
+    def _dev_of(self, target: str) -> str:
+        """The device a multicast target names (c3, c3:2, c3@ol)."""
+        return self._ref(target.partition("@")[0])[0]
+
     def _targets(self, toks: list[str], whole_network: bool = False) -> list[str]:
-        """Expand targets, retaining explicit interface/address selection."""
+        """Expand targets, retaining explicit interface/address selection and overlays
+        (c3@ol, all@ol for every member, or an overlay address)."""
         out: list[str] = []
         for t in toks:
-            if t.lower() in ("all", "*"):
+            if "@" in t:
+                who, _, ov = t.lower().partition("@")
+                if ov not in self.net.overlays:
+                    raise NetError(f"no overlay {ov or '(none named)'} (overlay <name> <devices…> makes one)")
+                ids = ([f"{d}@{ov}" for d in self.net.overlay_members(ov)] if who in ("all", "*")
+                       else [f"{self.net.get(self._ref(who)[0]).id}@{ov}"])
+            elif (a := self._parse_addr(t)) is not None and (hit := self.net.ol_resolve(a)):
+                ids = [f"{hit[1]}@{hit[0]}"]
+            elif t.lower() in ("all", "*"):
                 ids = self._participants(whole_network)
             elif t.lower() in self.net.groups:
                 ids = [d for d in self.net.devices_in(t.lower())
@@ -419,10 +481,13 @@ class TrafficCommands(CommandHost):
                 kind = "pingable devices" if whole_network else "computers"
                 raise NetError(f"no {kind} to send multicast ping")
             targets = self._targets(args[1:], whole_network)
-            sources = [src for src in sources if any(self._ref(dst)[0] != src for dst in targets)]
+            if all("@" in t for t in targets):    # only members can send over an overlay
+                ovs = {t.partition("@")[2] for t in targets}
+                sources = [s for s in sources if any(s in self.net.overlay_members(ov) for ov in ovs)]
+            sources = [src for src in sources if any(self._dev_of(dst) != src for dst in targets)]
             if not sources:
                 raise NetError("no receivers (the source can't send to itself)")
-            pairs = sum(self._ref(dst)[0] != src for src in sources for dst in targets)
+            pairs = sum(self._dev_of(dst) != src for src in sources for dst in targets)
             bulk = pairs >= self.BULK_PAIRS
             self.log_msg(f"[b bright_magenta]MULTICAST PING FROM ALL[/]: {len(sources)} senders · {pairs} requests"
                          + (" · whole network" if whole_network else "")
@@ -430,7 +495,7 @@ class TrafficCommands(CommandHost):
 
             def batch():
                 for src in sources:
-                    yield from self._multicast_steps(src, [d for d in targets if self._ref(d)[0] != src], True, bulk)
+                    yield from self._multicast_steps(src, [d for d in targets if self._dev_of(d) != src], True, bulk)
 
             self._prepare_multicast(batch(), pairs)
             return
@@ -449,7 +514,7 @@ class TrafficCommands(CommandHost):
             source = "src|all" if echo else "src"
             raise NetError(f"usage: {'mping' if echo else 'multicast'} <{source}> <id|(net,host)|group|all> [...]")
         src = self._src(args[0])
-        receivers = [d for d in self._targets(args[1:], whole_network) if self._ref(d)[0] != src]
+        receivers = [d for d in self._targets(args[1:], whole_network) if self._dev_of(d) != src]
         if not receivers:
             raise NetError("no receivers (the source can't send to itself)")
         bulk = len(receivers) >= self.BULK_PAIRS
@@ -465,9 +530,12 @@ class TrafficCommands(CommandHost):
         reply_targets: dict[str, str] = {}
         endpoints: dict[str, tuple[tuple[str, int], tuple[str, int]]] = {}
         lost: list[str] = []
+        carried: dict[str, list[Leg]] = {}           # replies to these retrace the overlay's path
         for d in receivers:
             try:
                 _, path, legs, _ = self._plan(src, d)
+                if self._carried and legs:
+                    carried[d] = legs
             except NetError as e:
                 if self.trace_enabled:
                     self._log_path_trace_failure("REQUEST", src, d, e)
@@ -485,7 +553,7 @@ class TrafficCommands(CommandHost):
             if echo:
                 reply_targets[d] = fmt(net.addr_of(legs[0][0])) if legs else src
             yield
-        recv_txt = " ".join(f"[{net.devices[self._ref(d)[0]].color}]{d}[/]" for d in receivers)
+        recv_txt = " ".join(f"[{net.devices[self._dev_of(d)].color}]{d}[/]" for d in receivers)
         frm = src if self.graph else f"{fmt(next((i.addr for _, i in net.addressed(src)), None))} [dim]({src})[/]"
         kind = "MULTICAST PING" if echo else "MULTICAST"
         if detailed():
@@ -538,7 +606,7 @@ class TrafficCommands(CommandHost):
                 self.refresh_sidebar()
 
         def arrived(dst: str) -> None:
-            dst_id = self._ref(dst)[0]
+            dst_id = self._dev_of(dst)
             c.flash_device(dst_id, "bright_magenta")
             if not echo:
                 finished()
@@ -546,7 +614,16 @@ class TrafficCommands(CommandHost):
             try:
                 net.get(dst_id)
                 net.get(src)
-                _, back, legs, _ = self._plan(dst_id, reply_targets[dst])
+                if dst in carried:                   # back through the subnet router, exit node or tunnel
+                    legs = [(b, a, self._reverse(p)) for a, b, p in reversed(carried[dst])]
+                    hops = [hop for leg in legs for hop in leg[2]]
+                    if down := next((d for d, _ in hops if not net.devices[d].up), None):
+                        raise NetError(f"{down} went down while the request was out")
+                    if any(li >= 0 and not net.usable(net.links[li]) for _, li in hops):
+                        raise NetError("a cable on the way back failed while the request was out")
+                    back = self._flatten(legs)
+                else:
+                    _, back, legs, _ = self._plan(dst_id, reply_targets[dst], reply=True)
             except NetError as e:
                 if self.trace_enabled:
                     self._log_path_trace_failure("REPLY", dst, src, e)

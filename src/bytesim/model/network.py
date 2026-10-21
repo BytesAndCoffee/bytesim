@@ -15,10 +15,12 @@ from .naming import NamingMixin
 from .routing import RoutingMixin
 from .stp import SpanningTreeMixin
 from .types import Device, Iface, Link, NetError
+from .overlay import OverlayMixin
+from .wan import WanMixin
 
 
 class Network(GroupsMixin, Layer2Mixin, AddressingMixin, RoutingMixin, HAMixin, LayoutMixin,
-              NamingMixin, SpanningTreeMixin, CloningMixin):
+              NamingMixin, SpanningTreeMixin, CloningMixin, WanMixin, OverlayMixin):
     """A simulated network: devices, cables, groups, addresses and HA clusters.
 
     Pure model, no UI: everything here can be driven from Python or tests.
@@ -42,6 +44,15 @@ class Network(GroupsMixin, Layer2Mixin, AddressingMixin, RoutingMixin, HAMixin, 
         for key in [k for k in self.ifaces if k.split(":")[0] == dev.id]:
             del self.ifaces[key]
         self.dhcp_off.discard(dev.id)
+        self.nat_off.discard(dev.id)
+        self.nat_hard.discard(dev.id)
+        self.relays = [d for d in self.relays if d != dev.id]
+        for name, ov in self.overlays.items():
+            self.leave_overlay(name, dev.id)
+            if ov.get("coord") == dev.id:
+                del ov["coord"]
+            if "acl" in ov:                   # an emptied list still means rules are on: deny all
+                ov["acl"] = [r for r in ov["acl"] if dev.id not in r]
         self.lags = {p for p in self.lags if dev.id not in p}
         self.stp_off.discard(dev.id)
         self.stp_priority.pop(dev.id, None)
@@ -117,6 +128,11 @@ class Network(GroupsMixin, Layer2Mixin, AddressingMixin, RoutingMixin, HAMixin, 
             "mlag_domains": sorted(self.mlag_domains),
             "stp_off": sorted(self.stp_off, key=lambda d: (d[0], int(d[1:]))),
             "stp_priority": self.stp_priority,
+            "internet": self.internet,
+            "nat_off": sorted(self.nat_off, key=lambda d: int(d[1:])),
+            "nat_hard": sorted(self.nat_hard, key=lambda d: int(d[1:])),
+            "overlays": self.overlay_state(),
+            "relays": self.relays,
         }, indent=2)
 
     @classmethod
@@ -155,4 +171,9 @@ class Network(GroupsMixin, Layer2Mixin, AddressingMixin, RoutingMixin, HAMixin, 
                     if len(set(p)) == 2 and set(p) <= set(net.devices) | net.mlag_domains}
         net.stp_off = set(data.get("stp_off", [])) & set(net.devices)
         net.stp_priority = {d: int(v) for d, v in data.get("stp_priority", {}).items() if d in net.devices}
+        net.internet = data.get("internet") if data.get("internet") in net.groups else None
+        net.nat_off = {d for d in data.get("nat_off", []) if d in net.devices and net.devices[d].kind == "g"}
+        net.nat_hard = {d for d in data.get("nat_hard", []) if d in net.devices and net.devices[d].kind == "g"}
+        net.load_overlays(data.get("overlays", {}))
+        net.relays = [d for d in data.get("relays", []) if d in net.devices]
         return net

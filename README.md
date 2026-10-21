@@ -63,6 +63,12 @@ forwarding, failure) and leaves out the detail that gets in the way:
   (`lag`) for parallel cables, and MLAG/vPC domains for cables to several switches.
 - **Switching loops**: spanning tree with root bridges and blocked ports, and
   real broadcast storms (frames multiplying, MAC tables flapping) when STP is off.
+- **The internet, NAT and overlays.** Declare which group is the internet and
+  sites sit behind NAT (easy or hard, double NAT included). Overlays connect
+  members through every NAT like a mesh VPN (modeled on Tailscale, though not a
+  fully faithful implementation): overlay addresses, direct or relayed
+  connections, a coordination server, subnet routers, exit nodes and access
+  rules.
 - **HA router clusters** with a shared virtual gateway, failover, split-brain,
   quorum or witness policies, and active-active or active-passive forwarding.
   Build redundant routed cores that inter-site traffic can't bypass.
@@ -93,6 +99,8 @@ bytesim --demo ha           # a clustered router pair between two fabrics
 bytesim --demo loop         # a switch loop with STP off: set off a storm
 bytesim --demo core         # three sites joined through a redundant routed core
 bytesim --demo mlag         # a seven-tier data centre built from bundled MLAG pairs
+bytesim --demo internet     # three sites behind NAT, joined only through the internet
+bytesim --demo overlay      # the same sites joined by a mesh-VPN overlay
 bytesim mynet.json          # open a saved network
 bytesim campus.yaml         # build one from a topology file
 bytesim mynet.json --log-file traffic.log  # also capture the console from startup

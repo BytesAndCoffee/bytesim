@@ -102,6 +102,19 @@ class NamingMixin(NetworkBase):
         self.groups = {g: [ren(m) if m in mapping else m for m in ms] for g, ms in self.groups.items()}
         self.ifaces = {f"{ren(k.split(':')[0])}:{k.split(':')[1]}": v for k, v in self.ifaces.items()}
         self.dhcp_off = {ren(d) for d in self.dhcp_off}
+        self.nat_off = {ren(d) for d in self.nat_off}
+        self.nat_hard = {ren(d) for d in self.nat_hard}
+        self.relays = [ren(d) for d in self.relays]
+        for ov in self.overlays.values():
+            ov["members"] = [ren(d) for d in ov["members"]]
+            ov["hosts"] = {ren(d): h for d, h in ov.get("hosts", {}).items()}
+            for key in ("coord", "exit"):
+                if key in ov:
+                    ov[key] = ren(ov[key])
+            if "routes" in ov:
+                ov["routes"] = [ren(d) for d in ov["routes"]]
+            if "acl" in ov:                       # rules name devices, groups, * or internet
+                ov["acl"] = [[ren(x) if x in mapping else x for x in r] for r in ov["acl"]]
         self.lags = {frozenset(ren(d) for d in p) for p in self.lags}   # domain names map to themselves
         self.stp_off = {ren(d) for d in self.stp_off}
         self.stp_priority = {ren(d): v for d, v in self.stp_priority.items()}

@@ -28,6 +28,9 @@ src/bytesim/
 │   ├── stp.py           spanning tree, loop detection, flooding, storms
 │   ├── equivalence.py   canonical form of a network; differences()
 │   ├── traffic.py       random traffic: generator (seeded), cable load, statistics
+│   ├── wan.py           the declared internet: WAN ports, NAT (what gets through, translations)
+│   ├── overlay.py       mesh-VPN overlays: addresses, direct/relayed connections, subnet routers,
+│   │                    exit nodes, access rules
 │   └── network.py       Network = all mixins + editing + JSON
 └── tui/
     ├── app.py           ByteSimApp: layout, dispatch(), changed()
@@ -49,7 +52,9 @@ src/bytesim/
         ├── scripting.py export script, run
         ├── history.py   undo / redo (snapshot per changing command)
         ├── interpreter.py tokens + dispatch (shared by the app and ScriptRunner)
-        └── traffic.py   ping, multicast ping, unicast, multicast
+        ├── traffic.py   ping, multicast ping, unicast, multicast
+        ├── wan.py       internet, nat
+        └── overlay.py   overlay, acl, relay
 ```
 
 ## The model

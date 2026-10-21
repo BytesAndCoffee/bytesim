@@ -204,6 +204,28 @@ Each entry names a switch and another switch, router or gateway with at least
 two data cables between them. It's read after `links:`, so the cables exist by
 then.
 
+### The internet, NAT and overlays
+```yaml
+devices:
+  g4: {ports: 2, nat: hard}    # a gateway's NAT: on (default), off, easy (default), hard, or [off, hard]
+internet: isp                  # this group is the public internet
+relays: [c8]                   # devices that relay overlay traffic
+overlays:
+  ol:
+    net: 100                   # optional: its overlay network (100–109)
+    members: [c1, c3, site3, c7]   # devices or groups (a group adds its non-switch devices)
+    hosts: {c7: 9}             # optional: overlay host numbers; the rest join in order
+    coord: c7                  # optional: the coordination server
+    exit: c7                   # optional: an exit node (a member)
+    lan: on                    # optional: with an exit node, own-site traffic stays local
+    routes: [c3]               # optional: subnet routers (members)
+    acl: [[c1, c3], [site1, internet], ['*', c7]]   # optional: an allow-list; [] allows nothing
+```
+These are read last, after groups and cables. Without `acl` every member
+reaches every other; with it, only what a pair `[from, to]` allows (a device,
+a group, `'*'` or `internet`). See the guide's *The internet, NAT and
+overlays* for what each setting does.
+
 ## Export
 
 ```text
@@ -218,7 +240,9 @@ export net.yaml ports    exact
   rebuilds identical cabling, and so identical MACs on each end.
 
 Both keep devices and port counts, groups, clusters and their policies, cable
-roles, and STP and DHCP-server settings. Export never invents templates: it
+roles, STP and DHCP-server settings, and the internet, NAT, relays and overlays
+(with their members' overlay host numbers, written only where joining in order
+wouldn't give them). Export never invents templates: it
 can't know which parts of your network you consider "the same".
 
 ## Errors
