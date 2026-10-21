@@ -124,6 +124,8 @@ class NamingMixin(NetworkBase):
         self.storming = {ren(d) for d in self.storming}
         self.mac_flaps = {ren(d): f for d, f in self.mac_flaps.items()}
         self.forget_macs()   # MACs are named after device ids
+        self.arp_cache = {(ren(d), p): {a: ((ren(o), op), t) for a, ((o, op), t) in cache.items()}
+                          for (d, p), cache in self.arp_cache.items()}
         if self._nics_up is not None:
             self._nics_up = {(ren(d), p, (ren(o), op)) for d, p, (o, op) in self._nics_up}
         self.notes = []

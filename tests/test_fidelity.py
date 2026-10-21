@@ -324,3 +324,94 @@ def test_a_host_plugged_into_a_live_loop_storms_at_once():
     notes = r.net.reconcile()
     assert any("c3's gratuitous ARP set off a broadcast storm" in n for n in notes)
     assert r.net.storming == {"s1", "s2", "s3"}
+
+
+# ---- ARP caches -------------------------------------------------------------------
+
+def counting_floods(net):
+    calls = []
+    real = net.flood
+
+    def flood(src):
+        calls.append(src)
+        return real(src)
+    net.flood = flood
+    return calls
+
+
+def test_the_first_send_asks_and_the_second_uses_the_cache():
+    net = lan()
+    r = ScriptRunner(net)
+    floods = counting_floods(net)
+    r.run("unicast c1 c2")
+    assert floods == [("c1", 1)] and "asked by c1:nic1" in plain(r)
+    assert net.arp_lookup(("c1", 1), (1, 11)) == ("c2", 1)
+    assert net.arp_lookup(("c2", 1), (1, 10)) == ("c1", 1)       # the target learned the asker
+    r.log.clear()
+    r.run("unicast c1 c2\nunicast c2 c1")
+    assert floods == [("c1", 1)] and "cached by c1:nic1" in plain(r)
+
+
+def test_entries_expire_and_the_next_send_asks_again():
+    net = lan()
+    r = ScriptRunner(net)
+    floods = counting_floods(net)
+    r.run("unicast c1 c2\nwait 59\nunicast c1 c2")
+    assert len(floods) == 1
+    r.run("wait 60\nunicast c1 c2")
+    assert len(floods) == 2
+
+
+def test_arp_shows_and_clears_caches():
+    r = ScriptRunner(lan())
+    r.run("unicast c1 c2\narp c1")
+    assert "c1:nic1    (1,11)    C2A     in 60s" in plain(r)
+    r.run("arp c1 clear")
+    assert r.net.arp_lookup(("c1", 1), (1, 11)) is None and r.net.arp_lookup(("c2", 1), (1, 10))
+
+
+def test_a_stale_entry_loses_one_packet_then_resolves_again():
+    net = lan()
+    r = ScriptRunner(net)
+    r.run("ip c2 (1,11)\nip c3 (1,12)\nunicast c1 c2")
+    r.run("ip c2 (1,30)\nip c3 (1,11)")                  # c3 takes over c2's old address
+    with pytest.raises(NetError, match="went to c2:nic1, which no longer has that address"):
+        r.run("unicast c1 (1,11)")
+    r.log.clear()
+    r.run("unicast c1 (1,11)")
+    assert "delivered to (1,11) c3" in plain(r)
+
+
+def test_a_moved_host_is_found_without_asking_again():
+    net = build(["c", "s", "c", "s"], [("c1", "s1"), ("s1", "c2"), ("s1", "s2")])
+    r = ScriptRunner(net)
+    floods = counting_floods(net)
+    r.run("unicast c1 c2")
+    r.run("unlink c2\nc2 s2")
+    net.reconcile()                                       # c2's gratuitous ARP re-teaches the switches
+    r.log.clear()
+    asked = len(floods)
+    r.run("unicast c1 c2")
+    assert "delivered to c2: 3 hops" in plain(r) and len(floods) == asked + 0
+
+
+def test_caches_follow_a_virtual_gateway_failover():
+    net = build(["c", "s", ("r", 3), ("r", 3), "s", "c"],
+                [("c1", "s1"), ("s1", "r1"), ("s1", "r2"), ("r1", "s2"), ("r2", "s2"), ("s2", "c2")])
+    r = ScriptRunner(net)
+    r.run("r1:3 r2:3 role=control\ncluster ha r1 r2")
+    net.reconcile()
+    r.run("ping c1 c2")
+    assert net.arp_lookup(("c1", 1), (1, 254))[0] == "r1"
+    r.run("fail r1")
+    net.reconcile()
+    r.log.clear()
+    r.run("ping c1 c2")
+    assert "  reply from c2" in plain(r)
+    assert net.arp_lookup(("c1", 1), (1, 254))[0] == "r2"
+
+
+def test_a_failed_device_comes_back_with_empty_caches():
+    r = ScriptRunner(lan())
+    r.run("unicast c1 c2\nfail c1\nrestore c1")
+    assert r.net.arp_lookup(("c1", 1), (1, 11)) is None

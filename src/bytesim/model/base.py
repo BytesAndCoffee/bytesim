@@ -23,6 +23,8 @@ class NetworkBase:
         self.dhcp_off: set[str] = set()           # routers/gateways not serving DHCP
         self.mac_tables: dict[str, dict[str, int]] = {}   # switch -> {mac: port}
         self.mac_seen: dict[str, dict[str, float]] = {}   # switch -> {mac: clock when last heard}
+        self.arp_cache: dict[tuple[str, int], dict[tuple[int, int], tuple[tuple[str, int], float]]] = {}
+        #   interface -> {address: (interface that has it, clock when the entry expires)}
         self.clock = 0.0                          # simulated seconds; `wait` and the app advance it
         self._nics_up: set[tuple] | None = None   # (computer, port, far end) live at the last reconcile
         self.clusters: dict[str, str] = {}        # HA cluster (a group of routers) -> split policy

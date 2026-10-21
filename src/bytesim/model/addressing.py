@@ -208,4 +208,5 @@ class AddressingMixin(NetworkBase):
                              f"{' '.join(sorted(fl.storm_switches, key=self.bridge_id))}")  # type: ignore[attr-defined]
             else:
                 self.learn_flood(fl)  # type: ignore[attr-defined]
+                self.arp_announce(nic, fl.delivered)  # type: ignore[attr-defined]
         return notes

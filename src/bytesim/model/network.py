@@ -6,6 +6,7 @@ from dataclasses import asdict
 
 from ..constants import KINDS, MAX_PORTS
 from .addressing import AddressingMixin
+from .arp import ArpMixin
 from .cloning import CloningMixin
 from .groups import GroupsMixin
 from .ha import HAMixin
@@ -19,7 +20,7 @@ from .overlay import OverlayMixin
 from .wan import WanMixin
 
 
-class Network(GroupsMixin, Layer2Mixin, AddressingMixin, RoutingMixin, HAMixin, LayoutMixin,
+class Network(GroupsMixin, Layer2Mixin, AddressingMixin, ArpMixin, RoutingMixin, HAMixin, LayoutMixin,
               NamingMixin, SpanningTreeMixin, CloningMixin, WanMixin, OverlayMixin):
     """A simulated network: devices, cables, groups, addresses and HA clusters.
 
@@ -60,6 +61,7 @@ class Network(GroupsMixin, Layer2Mixin, AddressingMixin, RoutingMixin, HAMixin, 
         self.storming.discard(dev.id)
         self.mac_flaps.pop(dev.id, None)
         self.forget_macs({dev.id})
+        self.arp_forget(dev.id)
         return before - len(self.links)
 
     def resize(self, dev_id: str, nports: int) -> None:
@@ -115,6 +117,7 @@ class Network(GroupsMixin, Layer2Mixin, AddressingMixin, RoutingMixin, HAMixin, 
         """Let simulated time pass. Returns notes on what expired along the way."""
         self.clock += seconds
         self.age_macs()
+        self.age_arp()
         return []
 
     # ---- persistence ---------------------------------------------------

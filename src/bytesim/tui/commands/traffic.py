@@ -8,7 +8,7 @@ from math import isfinite
 
 from rich.markup import escape
 
-from ...constants import ADDR, HOST_MAX, REF, TTL
+from ...constants import ADDR, HOST_MAX, REF, TTL, VIP_HOST
 from ...model import Leg, NetError, fmt
 from ...model.traffic import TRAFFIC_KINDS, TrafficGenerator, drop_reason
 from ..cables import route
@@ -35,6 +35,8 @@ class TrafficCommands(CommandHost):
     _overlay_src: tuple[int, int] | None = None   # set by _plan: the inner source of a tunnelled packet
     _carried = False                              # set by _plan: the overlay carried the last plan
     _relay: str | None = None                     # set by _plan: the relay the last tunnel went through
+    _arp_hits: list[bool] = []                    # set by _plan: which hops' ARP the cache answered
+    _arp_asked: list[tuple[int, int]] = []        # set by _plan: the address each hop asked ARP for
     SPEEDS = {"slow": 0.5, "normal": 1.0, "fast": 3.0}
     BULK_PAIRS = 128
 
@@ -275,21 +277,28 @@ class TrafficCommands(CommandHost):
             # Share structural indexes with routing, but leave the scope before
             # setting off a storm (a model mutation).
             asks = [(a, b) for a, b, _ in legs[:TTL]]
+            self._arp_asked = [self._next_hop_addr(legs, i) for i in range(len(asks))]
             if unanswered is not None:
                 asks.append((asker, None))
             floods, storm = [], None
-            for a, b in asks:
+            for (a, b), addr in zip(asks, self._arp_asked + [unanswered]):
+                if b is not None and (cached := net.arp_lookup(a, addr)) is not None:
+                    if cached != b and addr[1] == VIP_HOST:
+                        net.arp_store(a, addr, b)   # the virtual gateway's new owner announced itself
+                    floods.append(None)                # a cache hit: no ARP
+                    continue
                 fl = net.flood(a)
                 if fl.storm:
                     storm = a, b, fl
                     break
                 floods.append(fl)
+            self._arp_hits = [fl is None for fl in floods]
         if storm is not None:
             a, b, fl = storm
             what = fmt(net.addr_of(b) if b else unanswered)
             self.set_off_storm(fl, f"the ARP for {what} from {self._ifname(a)}")  # type: ignore[attr-defined]
             raise NetError(f"{self._ifname(a)} never got an ARP reply: its broadcast set off a storm")
-        done = self._exchange(legs[:TTL], floods)
+        done = self._exchange(legs[:TTL], floods, self._arp_asked)
         if unanswered is not None:
             net.learn_flood(floods[-1])
             raise NetError(f"nobody has {fmt(unanswered)} (ARP from {self._ifname(asker)} got no reply)")
@@ -314,7 +323,18 @@ class TrafficCommands(CommandHost):
         legs = self._best_route(src, sorted(routers), port)
         return legs, self._last_dst
 
-    def _exchange(self, legs: list[Leg], floods: list) -> list[Leg]:
+    def _next_hop_addr(self, legs: list[Leg], i: int) -> tuple[int, int]:
+        """The address hop i asks ARP for: a computer handing off to its gateway asks
+        for the gateway address it was configured with (a cluster's virtual one, say);
+        every other hop for the interface it's sending to."""
+        a, b, _ = legs[i]
+        if i < len(legs) - 1 and self.net.devices[a[0]].kind == "c":
+            ifc = self.net.iface(*a)
+            if ifc.gw is not None:
+                return ifc.net, ifc.gw
+        return self.net.addr_of(b)
+
+    def _exchange(self, legs: list[Leg], floods: list, asked: list[tuple[int, int]]) -> list[Leg]:
         """Each hop's ARP and frame, switched by the MAC tables they teach.
 
         The request floods and every switch it crosses learns the asker's MAC; the
@@ -323,15 +343,41 @@ class TrafficCommands(CommandHost):
         route did, the route's cables (and bundle members) stand."""
         net = self.net
         out: list[Leg] = []
-        for (a, b, p), fl in zip(legs, floods):
-            net.learn_flood(fl)
-            reply, why = net.forward(b, a)
-            if reply is None:
-                raise NetError(f"{self._ifname(a)} never got an ARP reply from {self._ifname(b)}: {why}")
-            net.learn(b, reply)
-            frame, why = net.forward(a, b)
+        for (a, b, p), fl, addr in zip(legs, floods, asked):
+            if fl is None:                             # cached: straight to the MAC it remembers
+                target = net.arp_lookup(a, addr)
+            else:
+                net.learn_flood(fl)
+                reply, why = net.forward(b, a)
+                if reply is None:
+                    raise NetError(f"{self._ifname(a)} never got an ARP reply from {self._ifname(b)}: {why}")
+                net.learn(b, reply)
+                net.arp_store(a, addr, b)               # the asker learns the answer,
+                net.arp_store(b, net.addr_of(a), a)     # and the target the asker
+                target = b
+            stale = " (a stale ARP entry: dropped, so the next packet asks again)"
+            if target[0] not in net.devices:
+                net.arp_evict(a, addr)
+                raise NetError(f"the frame from {self._ifname(a)} for {fmt(addr)} was lost: "
+                               f"nothing has its cached MAC any more{stale}")
+            frame, why = net.forward(a, target)
+            flooded = list(net.flooded)
             if frame is None:
-                raise NetError(f"the frame from {self._ifname(a)} to {self._ifname(b)} was lost: {why}")
+                if fl is None:
+                    net.arp_evict(a, addr)
+                raise NetError(f"the frame from {self._ifname(a)} to {self._ifname(target)} was lost: "
+                               f"{why}{stale if fl is None else ''}")
+            if target != b:
+                net.arp_evict(a, addr)
+                raise NetError(f"the frame from {self._ifname(a)} for {fmt(addr)} went to {self._ifname(target)}, "
+                               f"which no longer has that address{stale}")
+            if flooded:
+                mac = net.devices[b[0]].mac(b[1])
+                if (storm := net.flood(a)).storm:
+                    self.set_off_storm(storm, f"the unknown-unicast frame from {self._ifname(a)}")  # type: ignore[attr-defined]
+                    raise NetError(f"{' '.join(flooded)} flooded the frame for {mac} (unknown unicast) "
+                                   f"into a loop: it set off a storm")
+                net.notes.append(f"unknown unicast: {' '.join(flooded)} flooded the frame for {mac}")
             out.append((a, b, p if [d for d, _ in frame] == [d for d, _ in p] else frame))
         return out
 
@@ -398,9 +444,11 @@ class TrafficCommands(CommandHost):
         frm = fmt(self._overlay_src or net.addr_of(legs[0][0]))
         to = "internet" if internet else label.split()[0] if label.startswith("(") else fmt(net.addr_of(self._last_dst))
         self.log_msg(f"[b {color}]{kind}[/] {frm} → {to} [dim]({src} → {label})[/]: {chain}")
-        for a, b, _ in legs:
-            self.log_msg(f"  [dim]ARP {fmt(net.addr_of(b))} is-at {net.devices[b[0]].mac(b[1])} "
-                         f"(asked by {self._ifname(a)})[/]")
+        hits = self._arp_hits if len(self._arp_hits) == len(legs) else [False] * len(legs)
+        asked = self._arp_asked if len(self._arp_asked) == len(legs) else [net.addr_of(b) for _, b, _ in legs]
+        for (a, b, _), hit, addr in zip(legs, hits, asked):
+            self.log_msg(f"  [dim]ARP {fmt(addr)} is-at {net.devices[b[0]].mac(b[1])} "
+                         f"({'cached by' if hit else 'asked by'} {self._ifname(a)})[/]")
         for note in dict.fromkeys(net.notes):
             self.log_msg(f"  [{'red' if note.startswith('⚠') else 'orchid'}]{escape(note)}[/]")
 

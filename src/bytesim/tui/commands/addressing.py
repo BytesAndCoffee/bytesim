@@ -47,6 +47,31 @@ class AddressCommands(CommandHost):
                          f"on network {ifc.net}, no server)[/]")
         self.changed()
 
+    @command("arp")
+    def cmd_arp(self, args: list[str], opts: dict[str, str]) -> None:
+        """Show or clear ARP caches: arp · arp c1 · arp c1 clear · arp clear."""
+        net = self.net
+        words = [a.lower() for a in args]
+        clear = bool(words) and words[-1] == "clear"
+        if clear:
+            words = words[:-1]
+        if len(words) > 1:
+            raise NetError("usage: arp [<id>] [clear]")
+        dev = net.get(self._ref(words[0])[0]).id if words else None
+        if clear:
+            net.arp_forget(dev)
+            self.log_msg(f"ARP cache{'s' if dev is None else ''} cleared" + (f" on {dev}" if dev else ""))
+            return
+        rows = [(ifc, addr, owner, until) for ifc, cache in sorted(net.arp_cache.items())
+                if dev in (None, ifc[0]) for addr, (owner, until) in sorted(cache.items())]
+        if not rows:
+            self.log_msg(f"[dim]no ARP entries{' on ' + dev if dev else ''}[/]")
+            return
+        self.log_msg("[b]INTERFACE  ADDRESS   MAC     EXPIRES[/]")
+        for ifc, addr, owner, until in rows:
+            mac = net.devices[owner[0]].mac(owner[1]) if owner[0] in net.devices else "?"
+            self.log_msg(f"{self._ifname(ifc):10} {fmt(addr):9} {mac:7} in {until - net.clock:.0f}s")
+
     @command("dhcpd")
     def cmd_dhcpd(self, args: list[str], opts: dict[str, str]) -> None:
         net = self.net

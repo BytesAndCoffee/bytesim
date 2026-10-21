@@ -44,6 +44,7 @@ VIP_HOST = 254                                # virtual gateway shared by an HA 
 TTL = 64                                      # a packet's starting TTL; every router takes one off
 
 MAC_AGE = 300.0                               # seconds a switch keeps a MAC it hasn't heard from
+ARP_AGE = 60.0                                # seconds an interface keeps an ARP answer
 
 OVERLAY_NETS = range(100, 110)                # overlay networks, one per overlay (a nod to 100.x)
 
