@@ -587,6 +587,9 @@ class TrafficCommands(CommandHost):
             return
         src, port = self._src(args[0])
         net = self.net
+        if self._is_self(src, args[1]):
+            self.log_msg(f"{src}: {args[1]} is itself (loopback): no hops to trace")
+            return
         if self._overlay_dst(args[1]) is not None:
             raise NetError("traceroute follows real addresses: trace a member's real address, "
                            "or ping its overlay address")
@@ -610,6 +613,9 @@ class TrafficCommands(CommandHost):
         if why is None and (blocked := self._nat_blocked_at(legs)) is not None:
             legs, why = legs[:blocked[0] + 1], blocked[1]
         if not legs:
+            if why is None:                     # reached without a hop: a gateway to the internet
+                self.log_msg(f"{src} is a gateway: the internet is its next hop")
+                return
             raise NetError(f"traceroute {src} → {args[1]}: {why}")
         internet = cands is None
         remote = "internet" if internet else target[0]  # type: ignore[index]
@@ -651,8 +657,7 @@ class TrafficCommands(CommandHost):
         if len(args) != 2:
             raise NetError("usage: ping <src> <id|(net,host)|internet|group|all> [...]")
         src, port = self._src(args[0])
-        if args[1].lower() not in self.INTERNET and (
-                self._ref_or_none(args[1]) == src or (self._overlay_dst(args[1]) or ("", ""))[1] == src):
+        if self._is_self(src, args[1]):
             self.log_msg(f"{src}: reply from self (loopback)")
             return
         try:
@@ -662,7 +667,8 @@ class TrafficCommands(CommandHost):
                 self._log_path_trace_failure("REQUEST", src, args[1], e)
             raise NetError(f"ping {src} → {args[1]}: {e}") from None
         if len(path) < 2:
-            self.log_msg(f"[green]{src} is a gateway: internet reachable directly[/]")
+            self.log_msg(f"[green]{src} is a gateway: internet reachable directly[/]" if internet
+                         else f"{src}: reply from self (loopback)")
             return
         self._log_route("PING", "red", src, label, path, legs, internet)
         if self.trace_enabled:
@@ -737,6 +743,17 @@ class TrafficCommands(CommandHost):
             return f"{d} went down while the packet was on its way"
         return None
 
+    def _is_self(self, src: str, tok: str, overlays: bool = True) -> bool:
+        """Does tok name src itself: its id, one of its addresses, or (with ``overlays``)
+        its overlay address?"""
+        if tok.lower() in self.INTERNET:
+            return False
+        if self._ref_or_none(tok) == src or overlays and (self._overlay_dst(tok) or ("", ""))[1] == src:
+            return True
+        if not self.graph and (addr := self._parse_addr(tok)) is not None:
+            return (hit := self.net.resolve(addr)) is not None and hit[0] == src
+        return False
+
     def _ref_or_none(self, tok: str) -> str | None:
         m = REF.match(tok)
         return f"{m[1].lower()}{int(m[2])}" if m else None
@@ -763,7 +780,7 @@ class TrafficCommands(CommandHost):
         if len(args) != 2:
             raise NetError("usage: unicast <src> <id|(net,host)|internet>")
         src, port = self._src(args[0])
-        if self._ref_or_none(args[1]) == src:
+        if self._is_self(src, args[1], overlays=False):      # the overlay explains its own loopback
             raise NetError("source and destination are the same device")
         try:
             label, path, legs, internet = self._plan(src, args[1], port=port, stream=True)
@@ -772,7 +789,8 @@ class TrafficCommands(CommandHost):
                 self._log_path_trace_failure("UNICAST", src, args[1], e)
             raise NetError(f"unicast {src} → {args[1]}: {e}") from None
         if len(path) < 2:
-            raise NetError(f"{src} is a gateway: nothing to send through")
+            raise NetError(f"{src} is a gateway: nothing to send through" if internet
+                           else "source and destination are the same device")
         self._log_route("UNICAST", "#ffaf00", src, label, path, legs, internet)
         if self.trace_enabled:
             self._log_path_trace("UNICAST", src, label, path, legs, internet=internet)

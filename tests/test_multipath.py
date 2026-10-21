@@ -199,9 +199,10 @@ def mlag_net(domain=True, bundle=True, stp=True, peer=True):
     return net
 
 
-def test_an_mlag_domain_needs_peer_links():
-    with pytest.raises(NetError, match="peer links"):
-        mlag_net(peer=False)
+def test_an_mlag_domain_without_peer_links_is_declared_but_dual_active():
+    net = mlag_net(peer=False)                                      # like vPC: configure, cable later
+    assert net.mlag_domains == {"fab"} and "dual-active" in net.mlag_unjoined("fab")
+    assert net.mlag_peer_state("fab")[0] == "dual-active" and net.mlag_dual == {"fab"}
     with pytest.raises(NetError, match="switches only"):
         replay("add s 4 2\nadd c 1 1\ngroup x s1 c1\nmlag x")
 

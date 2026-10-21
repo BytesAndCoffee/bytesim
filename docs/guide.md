@@ -758,6 +758,9 @@ What changes once cables are bundled:
   on one member instead of circling.
 - **Load:** unicast flows are spread across the members by the same flow hash
   as ECMP. If a member fails, the others carry on.
+- **Down to one cable:** a bundle needs two data cables. Unplug, delete or
+  re-role the others and it dissolves (the console says so); a failed member
+  still counts, since it's still configured.
 - **A router or gateway end** treats the members as **one interface with one
   address** (on its lowest-numbered member port). Traffic to it is spread
   across all members, and it stays reachable if any member is up, even when
@@ -791,6 +794,10 @@ Once a domain is declared:
 - **Real vPC forwarding rules:** traffic leaves on the switch it's already on
   when that switch has a member. A frame that crossed a peer link is never sent
   out a bundle, so a broadcast can't loop back to the device that sent it.
+- **Declaring before cabling:** like vPC, a domain can be declared before its
+  peer links are cabled (with a warning), or keep running after they're
+  unplugged; until they're joined it runs dual-active (or, with a keepalive,
+  suspends the secondaries). A domain down to one switch dissolves.
 - **Peer link and keepalive:** a control cable between two of the domain's
   switches is their peer keepalive. The primary is the switch with the lowest
   bridge id. If every peer link fails while the keepalive still answers, the
@@ -1197,7 +1204,7 @@ them, and a group name on its own selects the group.
 | `tee [file\|off]` | | append console output to a text file, show status, or stop capture |
 | `broadcast <id[:port]>` | `bcast`, `flood` | flood one frame (storms in a live loop) |
 | `lag`, `lag auto`, `lag <switch\|domain> <switch\|router\|gateway\|domain>`, `unlag …`, `lags` | | find and bundle aggregatable spans |
-| `mlag <group…>`, `unmlag <group>`, `mlags` | | make a group of switches act as one (needs peer links); `mlags` shows peer state |
+| `mlag <group…>`, `unmlag <group>`, `mlags` | | make a group of switches act as one (dual-active until peer links join them); `mlags` shows peer state |
 | `stp [on\|off]`, `stp <switch…> on\|off`, `stp priority <switch> <n>`, `stp cost <switch:port> <n>` | | spanning tree |
 | `routes [router…]`, `route <router> <network\|default> via (n,h)\|drop\|auto` | `rib` | routing tables and static routes |
 | `renumber [auto] bfs\|dfs [root]`, `renumber off` | `rename` | renumber ids in traversal order |

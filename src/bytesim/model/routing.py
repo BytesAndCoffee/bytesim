@@ -81,6 +81,8 @@ class RoutingMixin(NetworkBase):
         if dst and dst[0] == src:
             return []
         dst_addr = self.addr_of(dst) if dst else None
+        if dst and dst_addr is None:
+            raise NetError(f"{dst[0]}:{self.devices[dst[0]].port_name(dst[1])} has no address")
         flow = f"{src}>{dst[0] if dst else 'internet'}"
         if dev.kind in "rg":
             return self._router_route(src, dst, dst_addr, flow, nat, into)

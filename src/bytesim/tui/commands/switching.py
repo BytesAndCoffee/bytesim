@@ -139,6 +139,8 @@ class SwitchingCommands(CommandHost):
             if g in net.mlag_domains:
                 raise NetError(f"{g} is already an MLAG domain")
             self._declare_mlag(g)
+            if (warning := net.mlag_unjoined(g)) is not None:
+                self.log_msg(f"  [yellow]⚠ {warning}[/]")
         self.changed()
 
     def _declare_mlag(self, g: str) -> None:

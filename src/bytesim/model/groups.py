@@ -147,7 +147,9 @@ class GroupsMixin(NetworkBase):
         if self.internet not in self.groups:
             self.internet = None
         self._prune_acl()
-        gone = self.mlag_domains - set(self.groups)
+        # A domain goes with its group, or once it's down to one switch (nothing to pair).
+        gone = {g for g in self.mlag_domains
+                if g not in self.groups or sum(1 for d in self.devices_in(g) if self.devices[d].kind == "s") < 2}
         if gone:
             self.mlag_domains -= gone
             self.lags = {p for p in self.lags if not p & gone}

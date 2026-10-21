@@ -1061,3 +1061,56 @@ def test_ttl_runs_out_before_the_last_routers_arp():
     with pytest.raises(NetError, match="TTL expired at r64"):
         r.run("unicast c1 c2")
     assert ("r64", 2) not in floods
+
+
+# ---- pre-tag scan: dead config, unjoined MLAG exports, self-addressed sends ----------------
+
+def test_a_bundle_left_with_one_cable_dissolves_and_exports():
+    from bytesim.scripting import replay
+    from bytesim.synthesis import synthesize
+    net = build([("s", 8), ("s", 8), "c", "c"], [("s1", "s2"), ("s1", "s2"), ("s1", "c1"), ("s2", "c2")])
+    r = ScriptRunner(net)
+    r.run("lag s1 s2\nfail s1:2")
+    assert net.reconcile() is not None and net.lags                  # a failed member still counts
+    r.run("restore s1:2\nunlink s1:2")
+    notes = net.reconcile()
+    assert not net.lags and any("lag s1–s2 dissolved" in n for n in notes)
+    assert replay(synthesize(net).script).lags == set()
+
+
+def test_an_mlag_domain_down_to_one_switch_dissolves():
+    net, r = mlag()
+    r.run("del s2")
+    net.reconcile()
+    assert not net.mlag_domains and not any("fab" in p for p in net.lags)
+
+
+def test_an_mlag_domain_whose_peer_links_were_unplugged_exports():
+    from bytesim.model.equivalence import differences
+    from bytesim.scripting import replay
+    from bytesim.synthesis import synthesize
+    net, r = mlag()
+    peer_link = net.links[peer(net)]
+    r.run(f"unlink {peer_link.a}:{peer_link.pa}")
+    net.reconcile()
+    assert net.mlag_domains == {"fab"} and net.mlag_dual == set()       # the keepalive still answers
+    assert net.mlag_peer_state("fab")[0] == "peer-down"
+    exported = synthesize(net)
+    assert not differences(net, replay(exported.script))
+
+
+@pytest.mark.parametrize("cmd, says", [("ping", "reply from self (loopback)"),
+                                       ("traceroute", "is itself (loopback)")])
+def test_a_send_to_your_own_address_is_loopback(cmd, says):
+    r = ScriptRunner(lan())
+    r.run(f"{cmd} c1 (1,10)")
+    assert says in plain(r) and "gateway" not in plain(r)
+    with pytest.raises(NetError, match="same device"):
+        r.run("unicast c1 (1,10)")
+
+
+def test_routing_to_an_unaddressed_interface_is_an_error_not_a_crash():
+    net = lan()
+    net.iface("c2", 1).clear()
+    with pytest.raises(NetError, match="has no address"):
+        net.route("c1", ("c2", 1))
