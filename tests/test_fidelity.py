@@ -787,3 +787,35 @@ def test_losing_a_whole_chassis_keeps_service():
         assert net.mlag_peer_state("fab")[0] == "single" and not net.mlag_suspended
         r.run("unicast c1 g1")
         assert "delivered to g1" in plain(r)
+
+
+# ---- traceroute ------------------------------------------------------------------------------
+
+def test_traceroute_lists_each_router_then_the_destination():
+    r = chain(3)
+    r.run("traceroute c1 c2")
+    text = plain(r)
+    for k, hop in enumerate(["r1 (1,1)", "r2 (2,2)", "r3 (3,2)", "c2 (4,10)"], 1):
+        assert f"  {k}  {hop}" in text
+    assert "(reached)" in text and "4 hops" in text
+
+
+def test_a_router_whose_answer_cant_get_back_shows_a_star():
+    r = chain(3)
+    r.run("route r2 1 drop\ntraceroute c1 c2")
+    text = plain(r)
+    assert "   2  *  (r2's time exceeded can't get back: r2 drops traffic for network 1" in text
+    assert "   1  r1 (1,1)" in text and "   3  *" in text      # r3's answer crosses r2 too
+
+
+def test_traceroute_through_nat_hears_from_routers_on_both_sides():
+    net, r = internet()
+    r.run("traceroute c1 c7")
+    text = plain(r)
+    assert "*" not in text and "(reached)" in text and "  1  g3" in text
+
+
+def test_traceroute_to_the_internet_ends_at_the_exit():
+    net, r = internet()
+    r.run("traceroute c1 internet")
+    assert "then the internet" in plain(r) and "(reached)" not in plain(r)

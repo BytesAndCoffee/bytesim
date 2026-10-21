@@ -450,6 +450,8 @@ table. Removing a cable or a device clears all the tables.
 ```text
 ping c1 c8                 echo request (red) and reply (green)
 ping c1:2 c8               send from c1's second NIC (computers only)
+traceroute c1 c8           TTL 1, 2, 3…: every router on the way, then c8
+wait 90                    let 90 simulated seconds pass (caches, mappings, leases age)
 ping c4 (1,1)              destinations can be addresses
 ping c1 internet           via the nearest gateway
 mping c1 c4 c6 c8          multicast request (magenta), individual replies (green)
@@ -469,7 +471,13 @@ mcast c1 pcs all           receivers can be group names or `all` (every computer
 An echo reply is a packet of its own: the receiver routes it back to the
 interface that asked, so a ping fails with `no reply` when the receiver has no
 way back (no gateway, say), even though the request arrived. Replies through an
-overlay retrace the request's tunnel. The reported TTL is the reply's.
+overlay retrace the request's tunnel. The reported TTL is the reply's. A
+receiver that fails (or is deleted) while the request is on its way never
+answers.
+
+`traceroute` sends probes with TTL 1, 2, 3…: the router where each runs out
+answers `time exceeded` from the address the probe came in on, and that answer
+is routed back on its own, so a router with no way back shows `*`.
 
 Detailed sends log the address path, an ARP line for every hop (`ARP (3,1) is-at
 R1C`) and the TTL. Multicast also reports where copies were made and how many
@@ -583,7 +591,7 @@ subsequent output immediately, including preparation and replies already in flig
 queued actions use the settings active when resumed. The inspector displays both
 settings. They persist across network loads, clears and undo/redo, independently
 of saved networks. Tracing also applies to ordinary ping, unicast and one-way
-multicast. `traceroute` and `tracert` remain ping aliases; `trace` controls output.
+multicast. `trace` controls output (it isn't `traceroute`, below).
 
 Startup flags set the same preferences:
 
@@ -1148,7 +1156,8 @@ them, and a group name on its own selects the group.
 | `ip [id[:port]] [addr [gw] \| dhcp \| adhoc \| none]` | | show or set addresses |
 | `dhcp`, `release`, `adhoc <id[:nic]\|all>` | | client address control |
 | `dhcpd <router> [on\|off]` | | router DHCP server |
-| `ping <src> <dst…>` | `tracert`, `traceroute` | echo and reply; groups, `all` or several destinations use multicast |
+| `ping <src> <dst…>` | | echo and reply; groups, `all` or several destinations use multicast |
+| `traceroute <src> <dst>` | `tracert` | probes with rising TTLs: each router answers time exceeded, `*` if its answer can't get back |
 | `mping <src\|all> <id\|addr\|group\|all> … [*]` | `mcastping`, `multicast-ping` | shared echo requests and replies; trailing `*` expands eligibility |
 | `trace [on\|off]` | | global full-path output; no argument shows status |
 | `detail [on\|off\|auto]` | | global diagnostic verbosity; auto adapts to batch size; no argument shows status |
@@ -1220,8 +1229,7 @@ ByteSim models the behaviours above and deliberately skips the rest:
   by ARP races.
 - STP converges instantly, and every hop's ARP is a fresh broadcast (there's no
   ARP cache).
-- Ping times are random. Hop counts and TTLs are real. `traceroute` is ping
-  under another name; it doesn't send probes with rising TTLs.
+- Ping times are random. Hop counts and TTLs are real.
 - MAC entries never age out, and only a dead cable makes a switch forget one
   (or removing a cable, which clears every table).
 - NAT maps addresses and ports but not protocols: ping and unicast flows are
