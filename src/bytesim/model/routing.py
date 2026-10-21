@@ -11,12 +11,13 @@ from .types import Leg, NetError, fmt
 
 class RoutingMixin(NetworkBase):
     @route_query
-    def route(self, src: str, dst: tuple[str, int] | None) -> list[Leg]:
+    def route(self, src: str, dst: tuple[str, int] | None, port: int | None = None) -> list[Leg]:
         """Path from a device to an interface (or to the internet if dst is None).
 
         Each leg is one layer-2 hop between addressed interfaces. A host delivers
         directly on its own network, otherwise via its gateway; routers know every
-        network of every router they share a network with (a toy IGP).
+        network of every router they share a network with (a toy IGP). A ``port``
+        binds a computer's packet to that interface (like ``ping -I``).
 
         Where several paths are equally short, the flow (source and destination)
         picks one: the same flow always takes the same path, different flows spread
@@ -27,6 +28,9 @@ class RoutingMixin(NetworkBase):
             raise NetError(f"{src} is a switch: layer 2 only, it has no address to send from")
         if not dev.up:
             raise NetError(f"{src} is down")
+        if port is not None and dev.kind in "rg":
+            raise NetError(f"{src} is a router: it picks its own outgoing interface "
+                           f"(send from {src}, not {src}:{dev.port_name(port)})")
         if dst and dst[0] == src:
             return []
         dst_addr = self.addr_of(dst) if dst else None
@@ -34,6 +38,10 @@ class RoutingMixin(NetworkBase):
         if dev.kind in "rg":
             return self._router_route(src, dst, dst_addr, flow)
         nics = self.addressed(src)
+        if port is not None:
+            nics = [(p, ifc) for p, ifc in nics if p == self.lag_primary(src, port)]
+            if not nics:
+                raise NetError(f"{src}:{dev.port_name(port)} has no address")
         if not nics:
             raise NetError(f"{src} has no address (try: dhcp {src})")
         if dst:
@@ -61,6 +69,10 @@ class RoutingMixin(NetworkBase):
             if gw is None:
                 problems.append(f"gateway {fmt((ifc.net, ifc.gw))} unreachable from {src}:{dev.port_name(p)}")
                 continue
+            if gw[0] in self.standby_routers() and not (dst is not None and dst[0] == gw[0]):  # type: ignore[attr-defined]
+                problems.append(f"gateway {fmt((ifc.net, ifc.gw))} is {gw[0]}, an active-passive "
+                                f"standby: it doesn't forward")
+                continue
             try:
                 return ([((src, p), gw, self.l2path((src, p), gw, flow))]
                         + self._router_route(gw[0], dst, dst_addr, flow))
@@ -69,7 +81,8 @@ class RoutingMixin(NetworkBase):
         if problems:
             raise NetError("; ".join(problems))
         where = f"network {dst_addr[0]}" if dst_addr else "the internet"
-        raise NetError(f"{where} isn't local to {src} and {src} has no gateway")
+        who = src if port is None else f"{src}:{dev.port_name(port)}"
+        raise NetError(f"{where} isn't local to {who} and {who} has no gateway")
 
     def _router_route(self, start: str, dst: tuple[str, int] | None,
                       dst_addr: tuple[int, int] | None, flow: str = "") -> list[Leg]:

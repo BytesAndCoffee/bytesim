@@ -16,7 +16,7 @@ HELP = """\
                                     also [cyan]mcast ping[/]; global [cyan]detail on[/] logs every reply
                                     global [cyan]trace on[/] shows full paths with ports, cable roles and link numbers
                                     bare device targets choose fewest hops, then lowest port; [cyan]r1:p2[/] selects an interface
-  [cyan]unicast[/] <src> <id|addr>         one-way packet to a single device
+  [cyan]unicast[/] <src> <id|addr>         one-way packet to a single device; [i]c1:2[/] sends from that NIC
   [cyan]multicast[/] <src> <ids|groups|all> one packet, copied where paths split, e.g. [i]mcast c1 pcs c8[/]
   [cyan]group[/] <name> <id|group ...>      logical layer; groups nest, e.g. [i]group dc1 fab1 rfab1[/]
   [cyan]group[/] <name>  or  <name>         select a group (arrows / drag its frame move everything in it)

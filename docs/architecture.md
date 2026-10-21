@@ -78,9 +78,15 @@ The model's core questions are answered by a few functions:
   has saturated it. Everything that forwards goes through this.
 - `segment(dev, port)`: the broadcast domain seen from one interface (every
   other interface reachable through switches alone).
-- `l2path(src_iface, dst_iface)`: the frame path between two interfaces.
-- `route(src, dst_iface)`: a list of **legs**, each one layer-2 hop between
-  addressed interfaces: `(from_iface, to_iface, frame_path)`.
+- `l2path(src_iface, dst_iface)`: the frame path between two interfaces, as
+  switches that have just learned both ends by ARP forward it. Routing plans with it.
+- `forward(src_iface, dst_iface)`: the frame path by the switches' MAC tables as
+  they are now (unknown destinations flood), or `None` and why it was lost. The
+  traffic commands run each hop's ARP exchange, teaching the tables, then send
+  the frame with this.
+- `route(src, dst_iface, port=None)`: a list of **legs**, each one layer-2 hop between
+  addressed interfaces: `(from_iface, to_iface, frame_path)`. A `port` binds a
+  computer's packet to that interface.
 - `ha_state(cluster)`: partitions, active sides, virtual-gateway owners, and
   a health level.
 - `stp_update()`: recomputes blocked ports (union-find over the switch graph,

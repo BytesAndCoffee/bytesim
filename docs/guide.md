@@ -396,17 +396,33 @@ for static. Press `v` to hide or show them.
   while different conversations spread across all the equal paths. In an
   active-active cluster, both routers share the load. The choice is stable
   from run to run, so seeded traffic stays reproducible.
+- Every router takes one off a packet's TTL, which starts at 64. The 64th
+  router on the way drops it (time exceeded), so at most 63 routers can lie
+  between two hosts.
 - When something can't be reached, ByteSim says why: no address, no gateway,
   no route, or a gateway that isn't reachable.
 
-Switches learn MAC addresses from the traffic that crosses them. Select a
-switch to see its MAC table. Removing a cable or a device clears all the
-tables.
+Every hop starts with ARP, and switches forward by what that teaches them:
+
+1. The ARP request floods the sender's broadcast domain, and every switch it
+   crosses learns the sender's MAC on the port it came in by.
+2. The reply travels back by those entries, and the switches on its way learn
+   the answering interface's MAC.
+3. The frame follows the switches' entries. A switch that doesn't know the
+   destination floods it; an entry for a cable that can't carry data counts
+   as forgotten. A wrong entry would misdeliver or drop the frame, but the ARP
+   reply has just corrected it.
+
+ARP for an address nobody has is still sent: the host asks on its own network,
+or the router on that network asks, and the broadcast floods (and can set off a
+storm) before the send fails with no reply. Select a switch to see its MAC
+table. Removing a cable or a device clears all the tables.
 
 ## Sending traffic
 
 ```text
 ping c1 c8                 echo request (red) and reply (green)
+ping c1:2 c8               send from c1's second NIC (computers only)
 ping c4 (1,1)              destinations can be addresses
 ping c1 internet           via the nearest gateway
 mping c1 c4 c6 c8          multicast request (magenta), individual replies (green)
@@ -422,6 +438,11 @@ unicast c2 c7              one-way packet (orange)
 mcast c1 c4 c6 c8          one packet, copied where the paths split (magenta)
 mcast c1 pcs all           receivers can be group names or `all` (every computer)
 ```
+
+An echo reply is a packet of its own: the receiver routes it back to the
+interface that asked, so a ping fails with `no reply` when the receiver has no
+way back (no gateway, say), even though the request arrived. Replies through an
+overlay retrace the request's tunnel. The reported TTL is the reply's.
 
 Detailed sends log the address path, an ARP line for every hop (`ARP (3,1) is-at
 R1C`) and the TTL. Multicast also reports where copies were made and how many
@@ -841,7 +862,9 @@ r1:16 r8:16 role=control-backup
 - **`mode=active-passive`**: only the active member (the first one alive in the
   winning partition) forwards traffic. The other stands by, and takes over the
   moment the active one fails or loses the election. The cluster's inspector
-  says who's forwarding and who's on standby.
+  says who's forwarding and who's on standby. A host whose gateway is the
+  standby's own address (not the virtual gateway) can reach the standby
+  itself, but nothing beyond it.
 - **`mode=active-active`** (the default): every active member forwards.
   Routers simply pick the shortest path.
 
@@ -1137,7 +1160,10 @@ ByteSim models the behaviours above and deliberately skips the rest:
   by ARP races.
 - STP converges instantly, and every hop's ARP is a fresh broadcast (there's no
   ARP cache).
-- Ping times are random. Hop counts and TTLs are real.
+- Ping times are random. Hop counts and TTLs are real. `traceroute` is ping
+  under another name; it doesn't send probes with rising TTLs.
+- MAC entries never age out, and only a dead cable makes a switch forget one
+  (or removing a cable, which clears every table).
 - NAT decides only what gets through. Addresses stay globally unique (there are
   no overlapping private ranges), and there are no port forwards.
 - Hole punching works unless both ends are behind hard NAT; real mesh VPNs

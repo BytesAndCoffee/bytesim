@@ -8,12 +8,20 @@ from math import isfinite
 
 from rich.markup import escape
 
-from ...constants import ADDR, HOST_MAX, REF
+from ...constants import ADDR, HOST_MAX, REF, TTL
 from ...model import Leg, NetError, fmt
 from ...model.traffic import TRAFFIC_KINDS, TrafficGenerator, drop_reason
 from ..cables import route
 from .base import CommandHost
 from .registry import command
+
+
+class NoArpReply(NetError):
+    """An address no interface has: whoever asks for it by ARP gets no reply."""
+
+    def __init__(self, addr: tuple[int, int]) -> None:
+        super().__init__(f"nobody has {fmt(addr)} (ARP got no reply)")
+        self.addr = addr
 
 
 class TrafficCommands(CommandHost):
@@ -122,7 +130,7 @@ class TrafficCommands(CommandHost):
         if (addr := self._parse_addr(tok)) is not None:
             hit = net.resolve(addr)
             if hit is None:
-                raise NetError(f"nobody has {fmt(addr)} (ARP got no reply)")
+                raise NoArpReply(addr)
             return f"{fmt(addr)} {hit[0]}", [hit]
         did, port = self._ref(tok)
         dev = net.get(did)
@@ -139,13 +147,13 @@ class TrafficCommands(CommandHost):
             raise NetError(f"{did} has no address (try: dhcp {did})")
         return did, cands
 
-    def _best_route(self, src: str, cands: list[tuple[str, int]] | None) -> list[Leg]:
+    def _best_route(self, src: str, cands: list[tuple[str, int]] | None, port: int | None = None) -> list[Leg]:
         if cands is None:
-            return self.net.route(src, None)
+            return self.net.route(src, None, port)
         best, err = None, None
         for c in cands:
             try:
-                legs = self.net.route(src, c)
+                legs = self.net.route(src, c, port)
             except NetError as e:
                 err = e
                 continue
@@ -155,21 +163,30 @@ class TrafficCommands(CommandHost):
             raise err  # type: ignore[misc]
         return best
 
-    def _src(self, tok: str) -> str:
-        did = self.net.get(self._ref(tok)[0]).id
-        if self.net.devices[did].kind == "s" and not self.graph:
-            raise NetError(f"{did} is a switch (layer 2): it can't originate addressed traffic")
-        return did
+    def _src(self, tok: str) -> tuple[str, int | None]:
+        """A sender and the interface it was asked to send from (None: its choice)."""
+        did, port = self._ref(tok)
+        dev = self.net.get(did)
+        if dev.kind == "s" and not self.graph:
+            raise NetError(f"{dev.id} is a switch (layer 2): it can't originate addressed traffic")
+        if port is not None and not 1 <= port <= dev.nports:
+            raise NetError(f"{dev.id} has no port {port} (it has {dev.nports})")
+        return dev.id, port
 
-    def _plan(self, src: str, tok: str, reply: bool = False) -> tuple[str, list[tuple[str, int]], list[Leg] | None, bool]:
+    def _plan(self, src: str, tok: str, reply: bool = False,
+              port: int | None = None) -> tuple[str, list[tuple[str, int]], list[Leg] | None, bool]:
         """Work out how a packet gets from src to tok: (label, device path, legs, to-internet).
 
         In graph mode it's the shortest cable path; in address mode it follows
         networks and gateways, and legs records each layer-2 hop. A ``reply`` belongs
-        to a flow the other side started, so NAT lets it back in."""
+        to a flow the other side started, so NAT lets it back in. A ``port`` sends
+        from that interface of src."""
         net = self.net
         internet = tok.lower() in self.INTERNET
         if self.graph:
+            if port is not None:
+                raise NetError("graph mode follows cables, not interfaces: send from the device, "
+                               "without :port (or `mode addr`)")
             if ADDR.match(tok):
                 raise NetError("graph mode ignores addresses: use device ids (or `mode addr`)")
             if "@" in tok:                        # pure connectivity: the tunnel is just the cable path
@@ -198,38 +215,99 @@ class TrafficCommands(CommandHost):
         net.notes.clear()
         self._overlay_src, self._carried, self._relay = None, False, None
         if (overlay := self._overlay_dst(tok)) is not None:
+            if port is not None:
+                raise NetError("an overlay packet leaves by its tunnel: send from the device, without :port")
             return self._plan_tunnel(src, *overlay)
-        storm = None
+        unanswered = None
         with net.remembering():
-            label, cands = self._resolve_dst(tok)
-            for c in (cands if cands is not None else [None]) if net.overlays and not reply else []:
-                if (via := net.overlay_via(src, c)) is not None:     # a subnet router or exit node
-                    legs, notes = net.routed_via(src, c, *via)
-                    net.notes.extend(notes)
-                    self._carried = True
-                    if c is not None:
-                        self._last_dst = c
-                    return label, self._flatten(legs), legs, c is None
             try:
-                legs = self._best_route(src, cands)
-            except NetError as e:
-                hint = self.storm_hint(src, *(c[0] for c in cands or []))  # type: ignore[attr-defined]
-                raise NetError(f"{e}{hint}") from None
-            if not reply and (blocked := net.nat_block(legs)):
-                raise NetError(blocked)
-            net.notes.extend(net.nat_notes(legs))
-            # Every hop starts with ARP. Share structural indexes with routing,
-            # but leave the scope before setting off a storm (a model mutation).
-            for a, b, _ in legs:
+                label, cands = self._resolve_dst(tok)
+            except NoArpReply as e:
+                unanswered = e.addr
+                legs, asker = self._arp_probe(src, e.addr, port)
+            else:
+                for c in (cands if cands is not None else [None]) if net.overlays and not reply else []:
+                    if (via := net.overlay_via(src, c)) is not None:     # a subnet router or exit node
+                        if port is not None:
+                            raise NetError(f"{tok} is reached through overlay {via[0]}: "
+                                           f"send from the device, without :port")
+                        legs, notes = net.routed_via(src, c, *via)
+                        net.notes.extend(notes)
+                        self._carried = True
+                        if c is not None:
+                            self._last_dst = c
+                        return label, self._flatten(legs), legs, c is None
+                try:
+                    legs = self._best_route(src, cands, port)
+                except NetError as e:
+                    hint = self.storm_hint(src, *(c[0] for c in cands or []))  # type: ignore[attr-defined]
+                    raise NetError(f"{e}{hint}") from None
+                if not reply and (blocked := net.nat_block(legs)):
+                    raise NetError(blocked)
+                net.notes.extend(net.nat_notes(legs))
+            # Every hop starts with ARP, up to the router where the TTL runs out.
+            # Share structural indexes with routing, but leave the scope before
+            # setting off a storm (a model mutation).
+            asks = [(a, b) for a, b, _ in legs[:TTL]]
+            if unanswered is not None:
+                asks.append((asker, None))
+            floods, storm = [], None
+            for a, b in asks:
                 fl = net.flood(a)
                 if fl.storm:
                     storm = a, b, fl
                     break
+                floods.append(fl)
         if storm is not None:
             a, b, fl = storm
-            self.set_off_storm(fl, f"the ARP for {fmt(net.addr_of(b))} from {self._ifname(a)}")  # type: ignore[attr-defined]
+            what = fmt(net.addr_of(b) if b else unanswered)
+            self.set_off_storm(fl, f"the ARP for {what} from {self._ifname(a)}")  # type: ignore[attr-defined]
             raise NetError(f"{self._ifname(a)} never got an ARP reply: its broadcast set off a storm")
-        return label, self._flatten(legs), legs, internet
+        done = self._exchange(legs[:TTL], floods)
+        if unanswered is not None:
+            net.learn_flood(floods[-1])
+            raise NetError(f"nobody has {fmt(unanswered)} (ARP from {self._ifname(asker)} got no reply)")
+        if len(legs) - 1 >= TTL:
+            raise NetError(f"TTL expired at {legs[TTL - 1][1][0]}, the {TTL}th router "
+                           f"(time exceeded: {len(legs) - 1} routers on the way)")
+        return label, self._flatten(done), done, internet
+
+    def _arp_probe(self, src: str, addr: tuple[int, int], port: int | None) -> tuple[list[Leg], tuple[str, int]]:
+        """For an address nobody has: the hops to the interface that asks for it by
+        ARP (src's own, if the network is on-link, else a router's on that network)."""
+        net = self.net
+        own = [(src, p) for p, ifc in net.addressed(src) if ifc.net == addr[0]
+               and (port is None or p == net.lag_primary(src, port))]
+        if own:
+            return [], own[0]
+        routers = [(d, p) for key, ifc in net.ifaces.items() if ifc.net == addr[0]
+                   for d, p in [(key.split(":")[0], int(key.split(":")[1]))]
+                   if net.is_router(d) and d in net.devices]
+        if not routers:
+            raise NetError(f"nobody has {fmt(addr)}: no route to network {addr[0]}")
+        legs = self._best_route(src, sorted(routers), port)
+        return legs, self._last_dst
+
+    def _exchange(self, legs: list[Leg], floods: list) -> list[Leg]:
+        """Each hop's ARP and frame, switched by the MAC tables they teach.
+
+        The request floods and every switch it crosses learns the asker's MAC; the
+        reply travels back by those entries, teaching its path the answer's MAC; the
+        frame then follows the entries. Where its switches send it the same way the
+        route did, the route's cables (and bundle members) stand."""
+        net = self.net
+        out: list[Leg] = []
+        for (a, b, p), fl in zip(legs, floods):
+            net.learn_flood(fl)
+            reply, why = net.forward(b, a)
+            if reply is None:
+                raise NetError(f"{self._ifname(a)} never got an ARP reply from {self._ifname(b)}: {why}")
+            net.learn(b, reply)
+            frame, why = net.forward(a, b)
+            if frame is None:
+                raise NetError(f"the frame from {self._ifname(a)} to {self._ifname(b)} was lost: {why}")
+            out.append((a, b, p if [d for d, _ in frame] == [d for d, _ in p] else frame))
+        return out
 
     def _overlay_dst(self, tok: str) -> tuple[str, str] | None:
         """(overlay, member) for c3@ol or an overlay address; None for ordinary destinations."""
@@ -313,13 +391,13 @@ class TrafficCommands(CommandHost):
             return
         if len(args) != 2:
             raise NetError("usage: ping <src> <id|(net,host)|internet|group|all> [...]")
-        src = self._src(args[0])
+        src, port = self._src(args[0])
         if args[1].lower() not in self.INTERNET and (
                 self._ref_or_none(args[1]) == src or (self._overlay_dst(args[1]) or ("", ""))[1] == src):
             self.log_msg(f"{src}: reply from self (loopback)")
             return
         try:
-            label, path, legs, internet = self._plan(src, args[1])
+            label, path, legs, internet = self._plan(src, args[1], port=port)
         except NetError as e:
             if self.trace_enabled:
                 self._log_path_trace_failure("REQUEST", src, args[1], e)
@@ -330,29 +408,52 @@ class TrafficCommands(CommandHost):
         self._log_route("PING", "red", src, label, path, legs, internet)
         if self.trace_enabled:
             self._log_path_trace("REQUEST", src, label, path, legs, internet=internet)
-        self._learn(legs, both_ways=True)
-        back = self._reverse(path)
+        self._learn(legs)
+        carried = self._carried
         c = self.canvas
         links = [li for _, li in path[1:]]
         c.heat(links)
-        ttl = 64 - self._routers_in(path, legs)
-        rtt = sum(random.uniform(0.15, 0.6) for _ in path) * 2 + (12 if internet else 0)
 
         def arrived() -> None:
             c.flash_device(path[-1][0], "red")
+            # The echo reply is its own packet: the destination routes it back to
+            # the interface that asked, which can fail even though the request arrived.
+            try:
+                if legs is None:                     # graph mode: cables carry either way
+                    back, back_legs = self._reverse(path), None
+                elif carried:                        # back through the subnet router, exit node or tunnel
+                    back_legs = [(b, a, self._reverse(p)) for a, b, p in reversed(legs)]
+                    hops = [hop for leg in back_legs for hop in leg[2]]
+                    if down := next((d for d, _ in hops if not self.net.devices[d].up), None):
+                        raise NetError(f"{down} went down while the request was out")
+                    if any(li >= 0 and not self.net.usable(self.net.links[li]) for _, li in hops):
+                        raise NetError("a cable on the way back failed while the request was out")
+                    back = self._flatten(back_legs)
+                else:
+                    _, back, back_legs, _ = self._plan(path[-1][0], fmt(self.net.addr_of(legs[0][0])), reply=True)
+            except NetError as e:
+                if self.trace_enabled:
+                    self._log_path_trace_failure("REPLY", label, src, e)
+                c.cool(links)
+                self.log_msg(f"  [red]✗ no reply from {label}: {escape(str(e))}[/]")
+                self.refresh_sidebar()
+                return
             if self.trace_enabled:
-                back_legs = [(b, a, self._reverse(p)) for a, b, p in reversed(legs)] if legs else None
                 self._log_path_trace("REPLY", label, src, back, back_legs,
-                                      dst_iface=legs[0][0] if legs else None)
-            c.send_packet(self._cells(back), "green", replied)
+                                      dst_iface=back_legs[-1][1] if back_legs else None)
+            self._learn(back_legs)
+            ttl = TTL - self._routers_in(back, back_legs)
+            rtt = sum(random.uniform(0.15, 0.6) for _ in path + back) + (12 if internet else 0)
 
-        def replied() -> None:
-            c.cool(links)
-            c.flash_device(src, "green")
-            metrics = (f": hops={len(path) - 1} ttl={ttl} time={rtt:.2f} ms"
-                       if self._show_detail() else "")
-            self.log_msg(f"  [green]reply from {label}[/]{metrics}")
-            self.refresh_sidebar()
+            def replied() -> None:
+                c.cool(links)
+                c.flash_device(src, "green")
+                metrics = (f": hops={len(back) - 1} ttl={ttl} time={rtt:.2f} ms"
+                           if self._show_detail() else "")
+                self.log_msg(f"  [green]reply from {label}[/]{metrics}")
+                self.refresh_sidebar()
+
+            c.send_packet(self._cells(back), "green", replied)
 
         c.send_packet(self._cells(path), "red", arrived)
 
@@ -381,11 +482,11 @@ class TrafficCommands(CommandHost):
         """One packet, one destination, no reply."""
         if len(args) != 2:
             raise NetError("usage: unicast <src> <id|(net,host)|internet>")
-        src = self._src(args[0])
+        src, port = self._src(args[0])
         if self._ref_or_none(args[1]) == src:
             raise NetError("source and destination are the same device")
         try:
-            label, path, legs, internet = self._plan(src, args[1])
+            label, path, legs, internet = self._plan(src, args[1], port=port)
         except NetError as e:
             if self.trace_enabled:
                 self._log_path_trace_failure("UNICAST", src, args[1], e)
@@ -535,14 +636,15 @@ class TrafficCommands(CommandHost):
         if len(args) < 2:
             source = "src|all" if echo else "src"
             raise NetError(f"usage: {'mping' if echo else 'multicast'} <{source}> <id|(net,host)|group|all> [...]")
-        src = self._src(args[0])
+        src, port = self._src(args[0])
         receivers = [d for d in self._targets(args[1:], whole_network) if self._dev_of(d) != src]
         if not receivers:
             raise NetError("no receivers (the source can't send to itself)")
         bulk = len(receivers) >= self.BULK_PAIRS
-        self._prepare_multicast(self._multicast_steps(src, receivers, echo, bulk), len(receivers))
+        self._prepare_multicast(self._multicast_steps(src, receivers, echo, bulk, port), len(receivers))
 
-    def _multicast_steps(self, src: str, receivers: list[str], echo: bool, bulk: bool) -> Iterator[None]:
+    def _multicast_steps(self, src: str, receivers: list[str], echo: bool, bulk: bool,
+                         port: int | None = None) -> Iterator[None]:
         """Yield between route queries and packet creation so large batches stay interactive."""
         def detailed() -> bool:
             return self._show_detail(bulk)
@@ -556,7 +658,7 @@ class TrafficCommands(CommandHost):
         relays: dict[str, str | None] = {}           # the relay a tunnel went through, if any
         for d in receivers:
             try:
-                _, path, legs, _ = self._plan(src, d)
+                _, path, legs, _ = self._plan(src, d, port=port)
                 if self._carried and legs:
                     carried[d], relays[d] = legs, self._relay
             except NetError as e:
@@ -664,7 +766,7 @@ class TrafficCommands(CommandHost):
                 self._log_route("ECHO REPLY", "green", dst_id, reply_label, back, legs, False)
             links = [li for _, li in back[1:]]
             c.heat(links)
-            ttl = 64 - self._routers_in(back, legs)
+            ttl = TTL - self._routers_in(back, legs)
             rtt = sum(random.uniform(0.15, 0.6) for _ in paths[dst] + back)
 
             def replied() -> None:

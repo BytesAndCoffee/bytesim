@@ -290,6 +290,9 @@ class Layer2Mixin(NetworkBase):
         path = self._l2path(src, dst, key)
         if path is None:
             return path
+        return self._hash_members(path, key)
+
+    def _hash_members(self, path: list[tuple[str, int]], key: str) -> list[tuple[str, int]]:
         out = list(path)
         for k in range(1, len(path)):              # every hop over a bundle: the same flow hash
             dev, li = path[k]
@@ -331,6 +334,68 @@ class Layer2Mixin(NetworkBase):
                     prev[w] = (u, i)
                     q.append(w)
         return None
+
+    def _toward(self, sw: str, came_by: int, arrive: set[tuple[str, int]]) -> int | None:
+        """The cable a flooded frame's copy leaves a switch by on its way to arrive
+        (never back the way it came), or None if no copy gets there."""
+        first: dict[str, int] = {sw: -1}
+        came = self.bundle(self.links[came_by])
+        q = deque([sw])
+        while q:
+            u = q.popleft()
+            for i, l in self.adjacent_links(u):
+                if i == came_by or not self.usable(l) or (u == sw and came is not None and self.bundle(l) == came):
+                    continue
+                w, wp = l.other(u)
+                if (w, wp) in arrive:
+                    return i if u == sw else first[u]
+                if self.devices[w].kind == "s" and w not in first:
+                    first[w] = i if u == sw else first[u]
+                    q.append(w)
+        return None
+
+    @structure_memo
+    def forward(self, src: tuple[str, int], dst: tuple[str, int],
+                flow: str | None = None) -> tuple[list[tuple[str, int]] | None, str]:
+        """Follow a unicast frame by the switches' MAC tables: (path, "") or (None, why).
+
+        A switch that knows the destination MAC sends the frame out of that port
+        only; one that doesn't floods it, and the copy heading for the destination
+        is the one followed. A wrong entry misdelivers or drops the frame. Entries
+        on cables that can't carry data count as forgotten (a link-down flush), and
+        an MLAG switch whose entry points over its peer link lets the domain, which
+        shares one table, pick the way."""
+        key = flow or f"{src}>{dst}"
+        mac = self.devices[dst[0]].mac(dst[1])
+        arrive = {(dst[0], p) for p in self.lag_ports(*dst)}
+        li = self._logical_link(src[0], src[1], key)
+        if li is None or not self.usable(self.links[li]):
+            return None, f"{src[0]}'s cable can't carry data"
+        path, u, seen = [(src[0], -1)], src[0], set()
+        while True:
+            v, vp = self.links[li].other(u)
+            path.append((v, li))
+            if (v, vp) in arrive:
+                return self._hash_members(path, key), ""
+            if self.devices[v].kind != "s":
+                return None, f"the frame for {mac} reached {v} instead (it drops it)"
+            if (v, li) in seen:
+                return None, f"the frame for {mac} loops through {v} (stale MAC tables)"
+            seen.add((v, li))
+            entry = self.mac_tables.get(v, {}).get(mac)
+            out = self.link_index(v, entry) if entry is not None else None
+            if out is not None and (not self.usable(self.links[out]) or self.is_peer_link(self.links[out])):
+                out = None
+            if out is not None:
+                came = self.bundle(self.links[li])
+                if out == li or (came is not None and came == self.bundle(self.links[out])):
+                    return None, (f"{v}'s MAC table has {mac} on port {entry}, where the frame came in "
+                                  f"(it filters it)")
+            else:
+                out = self._toward(v, li, arrive)
+                if out is None:
+                    return None, f"{v} floods the frame for {mac}, but no copy reaches it"
+            u, li = v, out
 
     def learn(self, src: tuple[str, int], path: list[tuple[str, int]]) -> None:
         """Switches along a frame's path learn the sender's MAC on the ingress port."""

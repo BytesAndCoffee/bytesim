@@ -28,6 +28,22 @@
   the tunnel) and in graph mode.
 - `demo overlay`; all of it is kept by saves, undo, export scripts and YAML topologies.
 
+### Forwarding fidelity
+- Ping replies route on their own instead of retracing the request: a receiver
+  with no way back (no gateway, say) now gives `✗ no reply` rather than a reply.
+  The reported TTL is the reply's.
+- TTLs are enforced: the 64th router on the way drops the packet (time exceeded).
+- An active-passive standby no longer forwards for hosts that use its own
+  address as their gateway.
+- A source interface (`ping c1:2 c3`, `unicast c1:2 c3`, `mping c1:2 …`) binds
+  the packet to that NIC instead of being ignored. Routers and graph mode refuse one.
+- Switches forward by their MAC tables: every hop's ARP request teaches the
+  switches it floods the sender's MAC, the reply teaches its path the answer's,
+  and the frame follows those entries (flooding unknown destinations, ignoring
+  entries on dead cables). `Network.forward()` follows the tables as they are.
+- ARP for an address nobody has is sent before it fails, from the host (on-link)
+  or from the router on that network, so it floods and can set off a storm.
+
 ## 0.3.2 (2026-10-20)
 
 - `demo mlag` (`bytesim --demo mlag`): a seven-tier data centre (edge gateway,
