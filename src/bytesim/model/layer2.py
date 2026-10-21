@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import functools
+import hashlib
 import zlib
 from collections import deque
 from contextlib import contextmanager
@@ -14,6 +15,17 @@ def flow_pick(options: list, flow: str, salt: object = "") -> object:
     """Choose one of several equal options for a flow: stable across runs, the same
     every time for the same flow, spread across different flows (CRC32, not hash())."""
     return options[zlib.crc32(f"{flow}|{salt}".encode()) % len(options)]
+
+
+def member_pick(options: list[int], links: list, flow: str, salt: object = "") -> int:
+    """Choose a bundle member for a flow by rendezvous hashing: each member scores the
+    flow, the highest score wins. The same flow keeps its member, and when a member
+    fails only the flows it carried move (the others' winners are still there)."""
+    def score(j: int) -> int:
+        l = links[j]
+        key = f"{flow}|{salt}|{l.a}:{l.pa}-{l.b}:{l.pb}".encode()
+        return int.from_bytes(hashlib.blake2b(key, digest_size=8).digest(), "big")   # CRC32 is linear: scores would correlate
+    return max(options, key=lambda j: (score(j), -j))
 
 
 def structure_memo(fn):
@@ -245,7 +257,7 @@ class Layer2Mixin(NetworkBase):
             return li
         if flow is None:
             return li if li in options else options[0]
-        return flow_pick(options, flow, sorted(pair))
+        return member_pick(options, self.links, flow, sorted(pair))
 
     def usable(self, l: Link) -> bool:
         """Can this cable carry data? Not if it's down, a control link, an end is dead,
@@ -301,7 +313,7 @@ class Layer2Mixin(NetworkBase):
                 here = {self.links[li].a, self.links[li].b}   # parallel members between these two
                 options = [j for j in self.members(pair) if {self.links[j].a, self.links[j].b} == here]
                 if options:
-                    out[k] = (dev, flow_pick(options, key, sorted(pair)))
+                    out[k] = (dev, member_pick(options, self.links, key, sorted(pair)))
         return out
 
     def _l2path(self, src: tuple[str, int], dst: tuple[str, int],

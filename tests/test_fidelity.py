@@ -226,3 +226,33 @@ def test_a_router_asks_for_a_missing_address_on_its_own_network():
         r.run("ping c1 (3,99)")
     with pytest.raises(NetError, match="nobody has \\(9,99\\): no route to network 9"):
         r.run("ping c1 (9,99)")
+
+
+# ---- link aggregation ------------------------------------------------------------
+
+def bundle(members=3):
+    net = build([("s", 8), ("s", 8)], [("s1", "s2")] * members)
+    ScriptRunner(net).run("lag s1 s2")
+    net.reconcile()
+    return net
+
+
+def test_a_flow_sticks_to_one_member_and_flows_spread_over_all():
+    net = bundle()
+    flows = [f"c{i}>c{i + 1}" for i in range(200)]
+    picks = {f: net._logical_link("s1", 1, f) for f in flows}
+    assert all(net._logical_link("s1", 1, f) == picks[f] for f in flows)
+    assert set(picks.values()) == {0, 1, 2}
+    assert min(list(picks.values()).count(i) for i in range(3)) > 40
+
+
+def test_a_member_failure_moves_only_its_own_flows():
+    net = bundle()
+    flows = [f"c{i}>c{i + 1}" for i in range(200)]
+    before = {f: net._logical_link("s1", 1, f) for f in flows}
+    net.links[1].up = False
+    after = {f: net._logical_link("s1", 1, f) for f in flows}
+    assert all(after[f] == before[f] for f in flows if before[f] != 1)
+    assert {after[f] for f in flows if before[f] == 1} == {0, 2}
+    net.links[1].up = True
+    assert {f: net._logical_link("s1", 1, f) for f in flows} == before
