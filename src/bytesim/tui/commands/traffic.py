@@ -388,8 +388,8 @@ class TrafficCommands(CommandHost):
 
         The request floods and every switch it crosses learns the asker's MAC; the
         reply travels back by those entries, teaching its path the answer's MAC; the
-        frame then follows the entries. Where its switches send it the same way the
-        route did, the route's cables (and bundle members) stand."""
+        frame then follows the entries. Where its switches send it the way the route
+        planned (bundle members aside), the route's member choices stand.""" 
         net = self.net
         out: list[Leg] = []
         for (a, b, p), fl, addr in zip(legs, floods, asked):
@@ -427,8 +427,17 @@ class TrafficCommands(CommandHost):
                     raise NetError(f"{' '.join(flooded)} flooded the frame for {mac} (unknown unicast) "
                                    f"into a loop: it set off a storm")
                 net.notes.append(f"unknown unicast: {' '.join(flooded)} flooded the frame for {mac}")
-            out.append((a, b, p if [d for d, _ in frame] == [d for d, _ in p] else frame))
+            out.append((a, b, p if self._same_way(frame, p) else frame))
         return out
+
+    def _same_way(self, frame: list[tuple[str, int]], planned: list[tuple[str, int]]) -> bool:
+        """Did the switches send the frame the way the route planned: the same devices,
+        over the same cables or other members of the same bundles?"""
+        net = self.net
+        if [d for d, _ in frame] != [d for d, _ in planned]:
+            return False
+        return all(x == y or (pair := net.bundle(net.links[x])) is not None and pair == net.bundle(net.links[y])
+                   for (_, x), (_, y) in zip(frame[1:], planned[1:]))
 
     def _overlay_dst(self, tok: str) -> tuple[str, str] | None:
         """(overlay, member) for c3@ol or an overlay address; None for ordinary destinations."""
