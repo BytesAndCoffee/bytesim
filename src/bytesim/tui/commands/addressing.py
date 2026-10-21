@@ -215,6 +215,8 @@ class AddressCommands(CommandHost):
                 raise NetError(usage) from None
             if addr is None:
                 raise NetError(usage)
+            if ov := next((o for o, t in net.overlays.items() if t["net"] == addr[0]), None):
+                raise NetError(f"network {addr[0]} is overlay {ov}'s: pick another network")
             owner = net.resolve(addr)
             if owner and owner != nic:
                 raise NetError(f"{fmt(addr)} is already used by {self._ifname(owner)} (ARP conflict)")

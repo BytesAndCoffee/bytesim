@@ -22,6 +22,8 @@ from ..constants import GROUP_NAME, HOST_MAX, REF, OVERLAY_NETS
 from .base import NetworkBase
 from .types import Leg, NetError, fmt
 
+# words the overlay command reads as subcommands or values, so no overlay can be named them
+OVERLAY_RESERVED = ("off", "remove", "advertise", "unadvertise", "peers", "all", "none", "internet")
 OVERLAY_KEYS = ("net", "members", "hosts", "coord", "exit", "lan", "routes", "acl")
 
 
@@ -37,11 +39,15 @@ class OverlayMixin(NetworkBase):
     PEER_TABLE_MAX = 10       # members up to which status shows every pair (it costs a route per pair)
 
     # ---- membership and overlay addresses --------------------------------------
+    def _physical_nets(self) -> set[int]:
+        """Network ids interfaces use (an older save, or a static address, can sit in the overlay range)."""
+        return {i.net for i in self.ifaces.values() if i.net is not None}  # type: ignore[attr-defined]
+
     def new_overlay_net(self) -> int:
-        used = {t["net"] for t in self.overlays.values()}
+        used = {t["net"] for t in self.overlays.values()} | self._physical_nets()
         free = [n for n in OVERLAY_NETS if n not in used]
         if not free:
-            raise NetError(f"at most {len(OVERLAY_NETS)} overlays")
+            raise NetError(f"no free overlay network ({OVERLAY_NETS.start}–{OVERLAY_NETS.stop - 1} are all in use)")
         return free[0]
 
     def new_overlay(self, ov: str, net_id: int | None = None) -> dict:
@@ -51,6 +57,8 @@ class OverlayMixin(NetworkBase):
                 raise NetError(f"an overlay's network is {OVERLAY_NETS.start}–{OVERLAY_NETS.stop - 1}")
             if net_id in {t["net"] for t in self.overlays.values()}:
                 raise NetError(f"network {net_id} is another overlay's")
+            if net_id in self._physical_nets():
+                raise NetError(f"network {net_id} is in use by interfaces: pick another overlay network")
         self.overlays[ov] = {"net": net_id if net_id is not None else self.new_overlay_net(),
                              "members": [], "hosts": {}}
         return self.overlays[ov]
@@ -133,10 +141,11 @@ class OverlayMixin(NetworkBase):
         names = set(self.devices) | set(self.groups) | {"*", "internet"}  # type: ignore[attr-defined]
         self.overlays = {}
         for ov, v in data.items():
-            if not isinstance(v, dict) or not GROUP_NAME.match(ov) or REF.match(ov):
+            if not isinstance(v, dict) or not GROUP_NAME.match(ov) or REF.match(ov) or ov in OVERLAY_RESERVED:
                 continue
             net_id = v.get("net")
-            if net_id not in OVERLAY_NETS or net_id in {t["net"] for t in self.overlays.values()}:
+            if (net_id not in OVERLAY_NETS or net_id in {t["net"] for t in self.overlays.values()}
+                    or net_id in self._physical_nets()):
                 net_id = None
             t = self.new_overlay(ov, net_id)
             hosts = v.get("hosts", {})
@@ -158,9 +167,9 @@ class OverlayMixin(NetworkBase):
                 t["acl"] = [list(r) for r in v["acl"] if len(r) == 2 and set(r) <= names]
 
     # ---- the coordination server -------------------------------------------------
-    def coord_state(self, ov: str) -> str | None:
-        """Why the overlay's coordination server can't be used right now (None: fine or none set)."""
-        coord = self.overlays[ov].get("coord")
+    def coord_state(self, ov: str | None, coord: str | None = None) -> str | None:
+        """Why the overlay's coordination server (or ``coord``) can't be used right now (None: fine or none set)."""
+        coord = coord or (self.overlays[ov].get("coord") if ov is not None else None)
         if coord is None:
             return None
         if coord not in self.devices:
@@ -169,11 +178,12 @@ class OverlayMixin(NetworkBase):
             return f"coordination server {coord} is down"
         return None
 
-    def can_register(self, ov: str, dev: str) -> str | None:
-        """Why dev can't join the overlay now (None if it can): it must reach the coordination server."""
-        if (problem := self.coord_state(ov)) is not None:
+    def can_register(self, ov: str, dev: str, coord: str | None = None) -> str | None:
+        """Why dev can't join the overlay now (None if it can): it must reach the coordination
+        server (``coord``, for one about to be set, or the overlay's own)."""
+        if (problem := self.coord_state(ov if ov in self.overlays else None, coord)) is not None:
             return problem
-        coord = self.overlays[ov].get("coord")
+        coord = coord or (self.overlays[ov].get("coord") if ov in self.overlays else None)
         if coord and coord != dev:
             try:
                 self._underlay(dev, coord)

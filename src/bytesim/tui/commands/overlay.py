@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from ...constants import GROUP_NAME, REF
 from ...model import NetError
+from ...model.overlay import OVERLAY_RESERVED
 from ...model.types import fmt
 from .base import CommandHost
 from .registry import command
@@ -13,7 +14,7 @@ OVERLAY_USAGE = ("usage: overlay [<name>]  ·  overlay <name> <device|group…> 
 
 
 class OverlayCommands(CommandHost):
-    RESERVED = ("off", "remove", "advertise", "unadvertise", "peers", "all", "none", "internet")
+    RESERVED = OVERLAY_RESERVED
     SETTINGS = ("coord", "exit", "lan", "net", "host")
 
     @command("overlay")
@@ -85,9 +86,11 @@ class OverlayCommands(CommandHost):
                 raise NetError(f"{ex} is not in overlay {name}: only members can route for it")
         if "lan" in opts and opts["lan"] not in ("on", "off"):
             raise NetError("lan=on|off: whether members keep their own site's traffic local with an exit node")
-        if exists and new:                        # joining means registering with the coordination server
+        if new and (coord is not None or (exists and "coord" not in opts)):
+            # joining means registering with the coordination server: the one this command
+            # sets, or the overlay's current one
             for d in new:
-                if (problem := net.can_register(name, d)) is not None:
+                if (problem := net.can_register(name, d, coord.id if coord is not None else None)) is not None:
                     raise NetError(f"{d} can't join overlay {name}: {problem}")
         if len(members) + len(new) > 254:
             raise NetError(f"overlay {name} would have more members than one network can address (254)")

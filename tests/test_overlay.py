@@ -550,3 +550,48 @@ def test_yaml_overlay_members_can_be_groups():
                         "links: [{chain: [g1, s1, c1]}, {connect: [s1, c2]}]\n"
                         "overlays: {ol: {members: [office, g1], routes: [c1], lan: on}}\n")
     assert net.overlay_members("ol") == ["c1", "c2", "g1"] and net.overlays["ol"]["lan"] is True
+
+
+# ---- review follow-ups ----------------------------------------------------------------
+
+@pytest.mark.parametrize("cmd, error", [
+    ("fail c8\noverlay new c1 coord=c8", "c1 can't join overlay new: coordination server c8 is down"),
+    ("fail g3:1\noverlay new c2 coord=c7", "c2 can't reach coordination server c7"),
+    ("fail c8\noverlay ol c2 coord=c8", "c2 can't join overlay ol: coordination server c8 is down"),
+])
+def test_new_members_must_reach_the_coordination_server_the_command_sets(cmd, error):
+    r = runner()
+    with pytest.raises(NetError, match=error):
+        r.run(cmd)
+    assert "new" not in r.net.overlays and r.net.overlays["ol"]["coord"] == "c7"   # nothing changed
+
+
+def test_joining_with_coord_none_needs_no_server():
+    r = runner()
+    r.run("fail c7\noverlay ol c2 coord=none")
+    assert "c2" in r.net.overlay_members("ol") and "coord" not in r.net.overlays["ol"]
+
+
+def test_overlays_avoid_networks_interfaces_already_use():
+    r = runner()
+    r.run("ip c2 (101,5) 1")                                # a static address in the overlay range
+    r.run("overlay lab c6")
+    assert r.net.overlays["lab"]["net"] == 102
+    with pytest.raises(NetError, match="network 101 is in use by interfaces"):
+        r.run("overlay lab2 c4 net=101")
+    with pytest.raises(NetError, match="network 100 is overlay ol's"):
+        r.run("ip c4 (100,9)")
+
+
+def test_a_save_whose_overlay_network_clashes_with_an_interface_moves_the_overlay():
+    net = runner().net
+    net.iface("c2", 1).mode, net.iface("c2", 1).net, net.iface("c2", 1).host = "static", 100, 77
+    net.load_overlays(net.overlay_state())
+    assert net.overlays["ol"]["net"] == 101 and net.ol_resolve((100, 77)) is None
+
+
+@pytest.mark.parametrize("name", ["all", "off", "remove", "internet", "none", "peers"])
+def test_yaml_rejects_overlay_names_the_command_reserves(name):
+    with pytest.raises(NetError, match=f"overlays.{name}: '{name}' is a word the overlay command uses"):
+        load_topology("schema: bytesim/topology-v1\ndevices: {c1: 1}\n"
+                      f"overlays: {{'{name}': {{members: [c1]}}}}\n")
