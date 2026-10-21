@@ -1,5 +1,8 @@
 # ByteSim user guide
 
+New here? Start with the [tutorial](tutorial.md): two small networks and a
+router, built from a blank canvas.
+
 - [The screen](#the-screen)
 - [Console logging](#console-logging)
 - [Devices and ports](#devices-and-ports)
