@@ -29,6 +29,7 @@ template-based YAML format, see [topology-format.md](topology-format.md).
   "mlag_domains": ["fab1"],
   "stp_off": ["s4", "s5"],
   "stp_priority": { "s7": 4096 },
+  "stp_cost": { "s7:3": 2000 },
   "internet": "isp",
   "nat_off": ["g6"],
   "nat_hard": ["g4", "g5"],
@@ -57,6 +58,7 @@ template-based YAML format, see [topology-format.md](topology-format.md).
 | `mlag_domains` | groups whose switches act as one logical switch (multi-chassis aggregation) |
 | `stp_off` | switches with spanning tree switched off (every other switch runs it) |
 | `stp_priority` | switch → bridge priority (default 32768; lower wins the root election) |
+| `stp_cost` | `"switch:port"` → STP path cost (default 20000, as for 1 Gb/s; lower is preferred toward the root) |
 | `internet` | the group that is the public internet (absent: none, so gateways lead to an implicit internet) |
 | `nat_off` | gateways facing the internet that don't run NAT |
 | `nat_hard` | gateways whose NAT is hard (hole punching to another hard NAT fails) |

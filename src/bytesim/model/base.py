@@ -39,6 +39,7 @@ class NetworkBase:
         self.notes: list[str] = []                # remarks from the last route() for the console
         self.stp_off: set[str] = set()            # switches with spanning tree switched off
         self.stp_priority: dict[str, int] = {}    # bridge priority (default 32768; lower = root)
+        self.stp_cost: dict[tuple[str, int], int] = {}   # (switch, port) -> path cost (default 20000)
         self.stp_blocked: set[tuple[str, int]] = set()    # (switch, port) held blocking by STP
         self.stp_roots: dict[str, str] = {}       # switch -> its area's root bridge
         self.stp_root_ports: dict[str, int] = {}  # switch -> port toward the root

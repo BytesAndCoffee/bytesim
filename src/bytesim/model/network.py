@@ -58,6 +58,7 @@ class Network(GroupsMixin, Layer2Mixin, AddressingMixin, ArpMixin, RoutingMixin,
         self.lags = {p for p in self.lags if dev.id not in p}
         self.stp_off.discard(dev.id)
         self.stp_priority.pop(dev.id, None)
+        self.stp_cost = {k: v for k, v in self.stp_cost.items() if k[0] != dev.id}
         self.storming.discard(dev.id)
         self.mac_flaps.pop(dev.id, None)
         self.forget_macs({dev.id})
@@ -74,6 +75,7 @@ class Network(GroupsMixin, Layer2Mixin, AddressingMixin, ArpMixin, RoutingMixin,
         dev.nports = nports
         for p in range(nports + 1, MAX_PORTS + 1):
             self.ifaces.pop(f"{dev.id}:{p}", None)
+            self.stp_cost.pop((dev.id, p), None)
 
     def connect(self, a: str, pa: int | None, b: str, pb: int | None, role: str = "data") -> Link:
         da, db = self.get(a), self.get(b)
@@ -138,6 +140,7 @@ class Network(GroupsMixin, Layer2Mixin, AddressingMixin, ArpMixin, RoutingMixin,
             "mlag_domains": sorted(self.mlag_domains),
             "stp_off": sorted(self.stp_off, key=lambda d: (d[0], int(d[1:]))),
             "stp_priority": self.stp_priority,
+            "stp_cost": {f"{s}:{p}": c for (s, p), c in sorted(self.stp_cost.items())},
             "internet": self.internet,
             "nat_off": sorted(self.nat_off, key=lambda d: int(d[1:])),
             "nat_hard": sorted(self.nat_hard, key=lambda d: int(d[1:])),
@@ -181,6 +184,10 @@ class Network(GroupsMixin, Layer2Mixin, AddressingMixin, ArpMixin, RoutingMixin,
                     if len(set(p)) == 2 and set(p) <= set(net.devices) | net.mlag_domains}
         net.stp_off = set(data.get("stp_off", [])) & set(net.devices)
         net.stp_priority = {d: int(v) for d, v in data.get("stp_priority", {}).items() if d in net.devices}
+        for key, c in data.get("stp_cost", {}).items():
+            s, _, p = key.partition(":")
+            if s in net.devices and net.devices[s].kind == "s" and p.isdigit() and 1 <= int(p) <= net.devices[s].nports:
+                net.stp_cost[s, int(p)] = int(c)
         net.internet = data.get("internet") if data.get("internet") in net.groups else None
         net.nat_off = {d for d in data.get("nat_off", []) if d in net.devices and net.devices[d].kind == "g"}
         net.nat_hard = {d for d in data.get("nat_hard", []) if d in net.devices and net.devices[d].kind == "g"}

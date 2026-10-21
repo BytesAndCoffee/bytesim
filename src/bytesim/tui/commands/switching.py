@@ -4,7 +4,7 @@ from __future__ import annotations
 from typing import Callable
 
 from ...model import NetError
-from ...model.stp import DEFAULT_PRIORITY, Flood
+from ...model.stp import DEFAULT_COST, DEFAULT_PRIORITY, MAX_COST, Flood
 from ..cables import route
 from .base import CommandHost
 from .registry import command
@@ -59,8 +59,26 @@ class SwitchingCommands(CommandHost):
             self.log_msg(f"{sw}: bridge priority {args[2]}")
             self.changed()
             return
+        if words[0] == "cost":
+            usage = f"usage: stp cost <switch:port> <1-{MAX_COST}|default>  (lower is preferred toward the root)"
+            if len(args) != 3 or not (args[2].isdigit() or words[2] == "default"):
+                raise NetError(usage)
+            did, port = self._ref(args[1])
+            sw = self._switch(did)
+            if port is None or not 1 <= port <= net.devices[sw].nports:
+                raise NetError(usage)
+            if words[2] == "default" or int(args[2]) == DEFAULT_COST:
+                net.stp_cost.pop((sw, port), None)
+            elif not 1 <= int(args[2]) <= MAX_COST:
+                raise NetError(usage)
+            else:
+                net.stp_cost[sw, port] = int(args[2])
+            self.log_msg(f"{sw}:p{port}: STP path cost {net.stp_cost.get((sw, port), DEFAULT_COST)}")
+            self.changed()
+            return
         if words[-1] not in ("on", "off"):
-            raise NetError("usage: stp  ·  stp on|off  ·  stp <switch…> on|off  ·  stp priority <switch> <n>")
+            raise NetError("usage: stp  ·  stp on|off  ·  stp <switch…> on|off  ·  stp priority <switch> <n>"
+                           "  ·  stp cost <switch:port> <n>")
         switches = ([self._switch(a) for a in args[:-1]] if len(args) > 1
                     else [d.id for d in net.sorted_devices() if d.kind == "s"])
         if words[-1] == "on":
@@ -319,6 +337,14 @@ class SwitchingCommands(CommandHost):
             if off:
                 line += f" · STP off on {' '.join(off)}"
             self.log_msg(line)
+            if root:
+                paths = [f"{s} {net.root_cost(s)} (root port p{net.stp_root_ports[s]})"
+                         for s in order if s in net.stp_root_ports]
+                if paths:
+                    self.log_msg("  root path cost: " + " · ".join(paths))
+            costs = sorted((s, p, c) for (s, p), c in net.stp_cost.items() if s in area)
+            if costs:
+                self.log_msg("  port costs: " + " ".join(f"{s}:p{p}={c}" for s, p, c in costs))
             if blocked:
                 self.log_msg("  blocking " + " ".join(f"{s}:p{p}" for s, p in blocked))
             if area & net.storming:

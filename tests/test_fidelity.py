@@ -415,3 +415,54 @@ def test_a_failed_device_comes_back_with_empty_caches():
     r = ScriptRunner(lan())
     r.run("unicast c1 c2\nfail c1\nrestore c1")
     assert r.net.arp_lookup(("c1", 1), (1, 11)) is None
+
+
+# ---- STP path costs ----------------------------------------------------------------
+
+def square():
+    """s1 (root) to s4 two ways: s1-s2-s4 and s1-s3-s4."""
+    net = build([("s", 4)] * 4 + ["c"], [("s1", "s2"), ("s1", "s3"), ("s2", "s4"), ("s3", "s4"), ("s4", "c1")])
+    return net, ScriptRunner(net)
+
+
+def test_equal_costs_keep_the_lower_bridge_id_and_a_cost_moves_the_root_port():
+    net, r = square()
+    assert net.stp_roots["s4"] == "s1"
+    assert net.stp_root_ports["s4"] == 1 and ("s4", 2) in net.stp_blocked     # via s2
+    r.run("stp cost s4:1 50000")
+    net.reconcile()
+    assert net.stp_root_ports["s4"] == 2 and ("s4", 1) in net.stp_blocked     # now via s3
+    assert net.root_cost("s4") == 40000
+    r.run("stp")
+    assert "s4 40000 (root port p2)" in plain(r) and "s4:p1=50000" in plain(r)
+
+
+def test_a_cheap_long_way_beats_an_expensive_short_one():
+    net = build([("s", 4)] * 3, [("s1", "s2"), ("s1", "s3"), ("s3", "s2")])
+    r = ScriptRunner(net)
+    r.run("stp cost s2:1 100000")                          # s2's direct port to the root
+    net.reconcile()
+    assert net.stp_root_ports["s2"] == 2 and ("s2", 1) in net.stp_blocked
+
+
+def test_disconnected_areas_get_their_own_trees():
+    net = build([("s", 4)] * 6, [("s1", "s2"), ("s2", "s3"), ("s3", "s1"),
+                                  ("s4", "s5"), ("s5", "s6"), ("s6", "s4")])
+    assert net.stp_roots["s3"] == "s1" and net.stp_roots["s6"] == "s4"
+    assert len(net.stp_blocked) == 2 and not net.loop_links()
+
+
+def test_stp_costs_survive_saves_exports_and_topologies():
+    from bytesim.model import Network as N
+    from bytesim.synthesis import synthesize
+    from bytesim.topology import dump_topology, load_topology
+    net, r = square()
+    r.run("stp cost s4:1 50000")
+    assert N.from_json(net.to_json()).stp_cost == {("s4", 1): 50000}
+    assert load_topology(dump_topology(net)).stp_cost == {("s4", 1): 50000}
+    exported = synthesize(net)
+    assert "stp cost s4:1 50000" in exported.script and not exported.limitations
+    with pytest.raises(NetError):
+        r.run("stp cost s4:9 5")
+    r.run("stp cost s4:1 default")
+    assert not net.stp_cost

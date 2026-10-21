@@ -166,6 +166,9 @@ class CloningMixin(NetworkBase):
                 self.stp_off.add(new)
             if old in self.stp_priority:
                 self.stp_priority[new] = self.stp_priority[old]
+            for (d, p), c in list(self.stp_cost.items()):
+                if d == old:
+                    self.stp_cost[new, p] = c
             if old in self.dhcp_off:
                 self.dhcp_off.add(new)
             if old in self.nat_off:

@@ -104,6 +104,14 @@ class _Builder:
             net.stp_off.add(dev.id)
         if "priority" in spec:
             net.stp_priority[dev.id] = int(spec["priority"])
+        if "costs" in spec:
+            costs = spec["costs"]
+            if dev.kind != "s" or not isinstance(costs, dict):
+                raise NetError(f"{where}.costs: STP port costs belong to a switch, as {{port: cost}}")
+            for p, c in costs.items():
+                if not str(p).isdigit() or not 1 <= int(p) <= dev.nports or not 1 <= int(c) <= 200_000_000:
+                    raise NetError(f"{where}.costs: {p}: {c} isn't a port of {dev.id} with a cost of 1..200000000")
+                net.stp_cost[dev.id, int(p)] = int(c)
         if dev.kind in "rg" and not _onoff(spec.get("dhcp", True), f"{where}.dhcp"):
             net.dhcp_off.add(dev.id)
         if "nat" in spec:
@@ -526,6 +534,8 @@ def dump_topology(net: Network, pin_ports: bool = False) -> str:
                 extra["stp"] = "off" if d.id in net.stp_off else "on"
             if d.id in net.stp_priority:
                 extra["priority"] = net.stp_priority[d.id]
+            if costs := sorted((p, c) for (s, p), c in net.stp_cost.items() if s == d.id):
+                extra["costs"] = "{" + ", ".join(f"{p}: {c}" for p, c in costs) + "}"
             if d.id in net.dhcp_off:
                 extra["dhcp"] = "off"
             nat = [w for w, on in (("off", d.id in net.nat_off), ("hard", d.id in net.nat_hard)) if on]

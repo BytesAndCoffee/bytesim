@@ -85,7 +85,7 @@ cabling patterns like `mesh` for the rest.
   next new device gets, match;
 - every group, its nesting and member order;
 - every cable on its exact ports, with its role (data, control, fabric);
-- HA clusters and their policies, STP settings (off, priority), DHCP servers
+- HA clusters and their policies, STP settings (off, priority, port costs), DHCP servers
   switched off, interface settings (static addresses, ad-hoc, off);
 - the internet, NAT settings, relays and overlays, with their members'
   overlay host numbers, coordination server, subnet routers, exit node and

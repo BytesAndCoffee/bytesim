@@ -637,8 +637,12 @@ frames have no TTL. That is a **broadcast storm**.
 
 **Switches run spanning tree (STP) by default.** In each area of cabled-
 together switches, STP elects a **root bridge** (the lowest bridge id:
-priority, then switch number). It keeps one shortest path from every switch to
-the root and **blocks** one end of every other switch-to-switch cable. Blocked
+priority, then switch number). Every port has a **path cost** (20000 by
+default, as for a 1 Gb/s port), and a switch's root path cost is the sum of
+the costs of the ports a frame from the root enters by. Each switch's **root
+port** is its cheapest way to the root (ties go to the lower bridge id, then
+port), and STP **blocks** one end of every other switch-to-switch cable: the
+end farther from the root. Blocked
 cables are drawn dashed, and the blocked port shows `⊘`. Switches with STP off
 can't block anything, but they pass STP frames straight through, so a single
 STP switch can still break a loop of plain switches. A loop made *only* of
@@ -649,11 +653,16 @@ stp                          every switched area: root bridge, blocked ports, li
 stp off  |  stp on           for every switch
 stp s4 s5 off                for some switches
 stp priority s7 4096         lower priority wins the root election (default 32768)
+stp cost s7:3 2000           a cheaper port is preferred toward the root (default 20000)
 broadcast c1                 flood one frame from c1 (or c1:2, r1:p6…)
 ```
 
-**What sets off a storm:** a `broadcast`, a DHCP DISCOVER, or the ARP request
-that starts every ping, unicast or multicast hop, sent into a live loop. The
+When the tree changes (a cable fails, a priority or cost changes), the switches
+in that area flush their MAC tables, as a topology-change notice makes them.
+
+**What sets off a storm:** a `broadcast`, a DHCP DISCOVER, a gratuitous ARP
+from a computer whose link comes up, an ARP request, or a frame for a MAC no
+switch knows (flooded), sent into a live loop. The
 console shows:
 
 - the number of frames in flight at each hop. A plain ring just circles; a
@@ -1107,7 +1116,7 @@ them, and a group name on its own selects the group.
 | `broadcast <id[:port]>` | `bcast`, `flood` | flood one frame (storms in a live loop) |
 | `lag`, `lag auto`, `lag <switch\|domain> <switch\|router\|gateway\|domain>`, `unlag …`, `lags` | | find and bundle aggregatable spans |
 | `mlag <group…>`, `unmlag <group>`, `mlags` | | make a group of switches act as one (needs peer links) |
-| `stp [on\|off]`, `stp <switch…> on\|off`, `stp priority <switch> <n>` | | spanning tree |
+| `stp [on\|off]`, `stp <switch…> on\|off`, `stp priority <switch> <n>`, `stp cost <switch:port> <n>` | | spanning tree |
 | `renumber [auto] bfs\|dfs [root]`, `renumber off` | `rename` | renumber ids in traversal order |
 | `layout [layered\|tree\|circular\|grid\|compact\|compact-layered] [auto\|horizontal\|vertical]`, `layout list` | `auto`, `arrange` | layout and/or flow direction, in either order; no argument reuses current settings; `list` shows choices |
 | `list` | `ls` | devices, cables, groups |
