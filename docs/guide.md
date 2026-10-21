@@ -926,9 +926,9 @@ relay c8                         c8 runs a relay (relay off c8, relay to list)
 - **Direct:** a pair connects directly by hole punching: each peer sends
   first, so each NAT treats the other's packets as replies. This works
   unless *both* ends are behind hard NAT.
-- **Relayed:** when both are, the traffic goes through the nearest relay
-  that both can reach. Each peer keeps an outbound connection to the relay,
-  so no NAT is in the way.
+- **Relayed:** when both are, or there's no direct path at all, the traffic
+  goes through the nearest relay that both can reach. Each peer keeps an
+  outbound connection to the relay, so no NAT is in the way.
 - **The coordination server:** a new member must be able to reach it to join.
   Packets never pass through it, so when it's down, existing tunnels keep
   working and only joining stops.
