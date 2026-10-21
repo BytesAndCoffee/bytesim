@@ -819,3 +819,10 @@ def test_traceroute_to_the_internet_ends_at_the_exit():
     net, r = internet()
     r.run("traceroute c1 internet")
     assert "then the internet" in plain(r) and "(reached)" not in plain(r)
+
+
+def test_a_new_echo_request_never_rides_a_mapping_in():
+    net, r = internet()
+    r.run("ping c1 c7")
+    with pytest.raises(NetError, match="dropped by g3's NAT: unsolicited inbound"):
+        r.run("ping c7 c1")

@@ -429,7 +429,8 @@ for static. Press `v` to hide or show them.
 - When something can't be reached, ByteSim says why: no address, no gateway,
   no route, or a gateway that isn't reachable.
 
-Every hop starts with ARP, and switches forward by what that teaches them:
+Every hop starts with ARP (unless the sender's cache already has the answer,
+below), and switches forward by what that teaches them:
 
 1. The ARP request floods the sender's broadcast domain, and every switch it
    crosses learns the sender's MAC on the port it came in by.
@@ -437,13 +438,22 @@ Every hop starts with ARP, and switches forward by what that teaches them:
    the answering interface's MAC.
 3. The frame follows the switches' entries. A switch that doesn't know the
    destination floods it; an entry for a cable that can't carry data counts
-   as forgotten. A wrong entry would misdeliver or drop the frame, but the ARP
+   as forgotten. A wrong entry misdelivers or drops the frame, unless an ARP
    reply has just corrected it.
 
 ARP for an address nobody has is still sent: the host asks on its own network,
 or the router on that network asks, and the broadcast floods (and can set off a
 storm) before the send fails with no reply. Select a switch to see its MAC
-table. Removing a cable or a device clears all the tables.
+table. Entries age out after five minutes without traffic from that MAC, a
+port whose link goes down forgets what it learned, and a computer whose link
+comes up (or moves) announces itself with a gratuitous ARP.
+
+Interfaces **cache ARP answers** for a minute (`arp c1` shows a cache, `arp
+c1 clear` empties it). A hop whose answer is cached sends no ARP: the frame
+goes straight to the cached MAC, and a switch that has forgotten that MAC
+floods it. If the address has moved meanwhile, that packet is lost and the
+entry dropped, so the next one asks again. Both ends of an exchange learn: the
+target caches the asker too. A failed device comes back with empty caches.
 
 ## Sending traffic
 
@@ -958,9 +968,10 @@ A gateway with a WAN port runs **NAT**, and keeps a table of mappings:
   `NAT at g3: (6,10):49152 leaves as (2,2):40000`. Two hosts going to the same
   place get different public ports. An easy NAT reuses a flow's public port
   whatever it talks to; a hard NAT picks a new one per destination.
-- **Coming back:** replies (and anything else the remote sends back on that
-  flow) are addressed to the public port and translated through the mapping,
-  so they reach the host that started the flow. A mapping lasts 60 seconds
+- **Coming back:** replies, and unicast the remote sends back on the flow (as
+  UDP does), are addressed to the public port and translated through the
+  mapping, so they reach the host that started the flow. A new echo request
+  from outside is a new flow, not a reply, so it doesn't get in. A mapping lasts 60 seconds
   after its last packet (`wait 61` and it's gone), and a gateway that fails
   loses its mappings.
 - **Coming in uninvited:** the gateway doesn't advertise its LAN to the
@@ -1230,8 +1241,8 @@ ByteSim models the behaviours above and deliberately skips the rest:
 - STP converges instantly, and every hop's ARP is a fresh broadcast (there's no
   ARP cache).
 - Ping times are random. Hop counts and TTLs are real.
-- MAC entries never age out, and only a dead cable makes a switch forget one
-  (or removing a cable, which clears every table).
+- MAC tables have no size limit, and an STP change flushes a whole area at
+  once rather than ageing it fast.
 - NAT maps addresses and ports but not protocols: ping and unicast flows are
   mapped alike, and nothing rewrites checksums. Addresses stay globally unique
   (there are no overlapping private ranges), and there are no port forwards.

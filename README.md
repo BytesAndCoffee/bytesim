@@ -44,8 +44,14 @@ forwarding, failure) and leaves out the detail that gets in the way:
 - **Simple addressing.** An address is a pair: a network id and an 8-bit host
   number, like `(2,14)`. MAC addresses name the physical port: `R1A` is port 1
   of router r1.
-- **DHCP and ad-hoc addressing**, animated as broadcast-then-reply.
-- **Routing** through gateways and between routers, with ARP shown for every hop.
+- **DHCP and ad-hoc addressing**, animated as broadcast-then-reply, with
+  server bindings, conflict probing, renewal and expiry on a simulated clock
+  (`wait`).
+- **Routing tables**: every router forwards by its own table (connected,
+  learned by a link-state protocol, static, default), hop by hop. `routes`,
+  `route r1 5 via (2,2)`, and a real `traceroute`.
+- **Switching and ARP as they work**: switches forward by MAC tables that
+  learn, age and flush; interfaces cache ARP answers; TTLs run out.
 - **Random traffic** with per-cable load shading and statistics (drops, busiest
   cables, top talkers), reproducible with a seed.
 - **Unicast, ping and multicast.** With multicast you can see the packet copied
@@ -60,11 +66,13 @@ forwarding, failure) and leaves out the detail that gets in the way:
   file while keeping it on screen; `tee off` stops capture.
 - **Cable roles** (data, control, fabric) and failures you can trigger by hand.
 - **Multipath**: flow-hashed ECMP across equal-cost routes, link aggregation
-  (`lag`) for parallel cables, and MLAG/vPC domains for cables to several switches.
-- **Switching loops**: spanning tree with root bridges and blocked ports, and
+  (`lag`) for parallel cables, and MLAG/vPC domains for cables to several switches,
+  with a peer keepalive and dual-active detection.
+- **Switching loops**: spanning tree with root bridges, port costs and blocked ports, and
   real broadcast storms (frames multiplying, MAC tables flapping) when STP is off.
 - **The internet, NAT and overlays.** Declare which group is the internet and
-  sites sit behind NAT (easy or hard, double NAT included). Overlays connect
+  sites sit behind stateful NAT (per-flow mappings that expire; easy or hard,
+  double NAT included). Overlays connect
   members through every NAT like a mesh VPN (modeled on Tailscale, though not a
   fully faithful implementation): overlay addresses, direct or relayed
   connections, a coordination server, subnet routers, exit nodes and access

@@ -202,14 +202,16 @@ class TrafficCommands(CommandHost):
         return dev.id, port
 
     def _plan(self, src: str, tok: str, reply: bool = False, port: int | None = None,
-              remote: str | None = None) -> tuple[str, list[tuple[str, int]], list[Leg] | None, bool]:
+              remote: str | None = None, stream: bool = False) -> tuple[str, list[tuple[str, int]], list[Leg] | None, bool]:
         """Work out how a packet gets from src to tok: (label, device path, legs, to-internet).
 
         In graph mode it's the shortest cable path; in address mode it follows
         networks and gateways, and legs records each layer-2 hop. A ``reply`` belongs
         to a flow the other side started: it opens no NAT mappings, and gets back in
         through the ones its request made (from ``remote``, src unless the reply comes
-        from the internet). A ``port`` sends from that interface of src."""
+        from the internet). A ``stream`` packet (unicast, like UDP) may also ride a
+        flow the other side started back in; an echo request never does, since NAT
+        tells requests from replies. A ``port`` sends from that interface of src."""
         net = self.net
         internet = tok.lower() in self.INTERNET
         if self.graph:
@@ -280,7 +282,7 @@ class TrafficCommands(CommandHost):
                         try:
                             legs = self._best_route(src, cands, port)
                         except NetError as e:
-                            legs = self._nat_return(src, cands, remote or src)
+                            legs = self._nat_return(src, cands, remote or src) if reply or stream else None
                             if legs is None:
                                 if (blocked := self._nat_explain(src, cands)) is not None:
                                     raise NetError(blocked) from None
@@ -684,7 +686,7 @@ class TrafficCommands(CommandHost):
         if self._ref_or_none(args[1]) == src:
             raise NetError("source and destination are the same device")
         try:
-            label, path, legs, internet = self._plan(src, args[1], port=port)
+            label, path, legs, internet = self._plan(src, args[1], port=port, stream=True)
         except NetError as e:
             if self.trace_enabled:
                 self._log_path_trace_failure("UNICAST", src, args[1], e)
@@ -1123,7 +1125,7 @@ class TrafficCommands(CommandHost):
             self.animate_flood(fl, color, lambda: gen.stats.arrive(src), max_hops=4)  # type: ignore[attr-defined]
             return
         try:
-            _, path, legs, _ = self._plan(src, dst)
+            _, path, legs, _ = self._plan(src, dst, stream=True)
         except NetError as e:
             gen.stats.drop(src, kind, drop_reason(str(e)))
             return

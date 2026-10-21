@@ -30,7 +30,7 @@ src/bytesim/
 │   ├── stp.py           spanning tree, loop detection, flooding, storms
 │   ├── equivalence.py   canonical form of a network; differences()
 │   ├── traffic.py       random traffic: generator (seeded), cable load, statistics
-│   ├── wan.py           the declared internet: WAN ports, NAT (what gets through, translations)
+│   ├── wan.py           the declared internet: WAN ports, stateful NAT (mappings, returns, expiry)
 │   ├── overlay.py       mesh-VPN overlays: addresses, direct/relayed connections, subnet routers,
 │   │                    exit nodes, access rules
 │   └── network.py       Network = all mixins + editing + JSON
@@ -279,6 +279,12 @@ pytest
   `conftest.py`.
 - `tests/test_app.py` drives the real app headlessly with Textual's
   `run_test()` and waits for packet animations to finish.
+- `tests/test_fidelity.py` holds each mechanism to its real behaviour: echo
+  replies, TTL, MAC tables and aging, ARP caches, STP costs, routing tables,
+  stateful NAT, DHCP leases, MLAG peer state, traceroute.
+- `tests/test_invariants.py` runs seeded random fault sequences on the demos
+  and checks every delivered packet's trace hop by hop, without trusting the
+  path search.
 
 ## Releasing
 
