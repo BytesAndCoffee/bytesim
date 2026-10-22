@@ -13,7 +13,7 @@ license-files = ["LICENSE"]
 authors = [{ name = "Michael Yazdani" }]
 keywords = ["network", "simulator", "tui", "textual", "networking", "education", "dhcp", "routing"]
 classifiers = [
-    "Development Status :: 3 - Alpha",
+    "Development Status :: 4 - Beta",
     "Environment :: Console",
     "Intended Audience :: Education",
     "Intended Audience :: Developers",

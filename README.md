@@ -142,6 +142,19 @@ through devices.
 - [Changelog](CHANGELOG.md)
 - [Roadmap](ROADMAP.md): planned work
 
+## Stability
+
+From 1.0.0b1, packet behaviour is feature-frozen: the betas fix bugs and
+fidelity gaps, and add no new packet features. Until 1.0.0:
+
+- **Kept compatible:** save files (older ones always load), topology files,
+  construction scripts and the console commands documented in the
+  [guide](docs/guide.md).
+- **May still change:** console wording and colours, the layout algorithms and
+  the Python API beyond `Network`, `Device`, `Iface`, `Link` and `NetError`.
+- **Experimental:** anything the [roadmap](ROADMAP.md) marks experimental, such
+  as pop-out panels, has no compatibility promise.
+
 ## Using the model from Python
 
 The simulation is a plain Python model with no UI dependency:
