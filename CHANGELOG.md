@@ -1,6 +1,9 @@
 # Changelog
 
-## Unreleased
+## 1.0.0b1 (2026-10-21)
+
+First beta: packet behaviour is feature-frozen until 1.0.0. See
+[Stability](README.md#stability).
 
 ### Fidelity follow-ups
 - Unknown-unicast storm detection follows the frame's own copies: a switch that

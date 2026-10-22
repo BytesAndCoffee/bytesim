@@ -7,7 +7,7 @@ The model (``bytesim.model``) can be used on its own::
     net.add("r"); net.add("c")
     net.connect("r1", None, "c1", None)
 """
-__version__ = "0.3.2"
+__version__ = "1.0.0b1"
 
 from .model import Device, Iface, Link, NetError, Network  # noqa: E402
 
