@@ -44,3 +44,16 @@ jobs:
       - run: python -m pip install hatch
       - run: hatch build
       - run: hatch run dist-check
+
+  byteplan:
+    # Unfinished work is tracked with BytePlan: this checks that the commit's TODO/FIXME
+    # annotations and .byteplan/tasks.json agree. Read-only; it never changes the code.
+    name: BytePlan task registry
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: python -m pip install "byteplan==0.1.0"
+      - run: byteplan check --commit HEAD
