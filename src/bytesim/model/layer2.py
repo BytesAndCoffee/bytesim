@@ -170,6 +170,18 @@ class Layer2Mixin(NetworkBase):
         return sum(1 for l in self.links if l.role == "data"
                    and {self.end(l.a), self.end(l.b)} == {a, b} and self.end(l.a) != self.end(l.b))
 
+    def prune_bundles(self) -> list[str]:
+        """Bundles left with fewer than two data cables (others unplugged, deleted or
+        given another role) dissolve, as the lag command needs two. Failed cables still
+        count: they're still configured. Returns notes."""
+        notes = []
+        for pair in sorted(self.lags, key=lambda p: sorted(p, key=self._end_order)):
+            a, b = sorted(pair, key=self._end_order)
+            if self.span_cables(a, b) < 2:
+                self.lags.discard(pair)
+                notes.append(f"lag {a}–{b} dissolved: fewer than two data cables left")
+        return notes
+
     def lag_problem(self, a: str, b: str) -> str | None:
         """Why two ends (devices or MLAG domains) can't be aggregated, or None if they can."""
         if a == b:
@@ -221,7 +233,14 @@ class Layer2Mixin(NetworkBase):
         for other in self.mlag_domains:
             if other != group and set(devs) & set(self.devices_in(other)):  # type: ignore[attr-defined]
                 return f"{group} overlaps MLAG domain {other}"
-        reach, todo = {devs[0]}, [devs[0]]                 # peer links must join them all
+        return None
+
+    def mlag_unjoined(self, group: str) -> str | None:
+        """A warning, not an error: switches of the group that no peer link joins. Like
+        vPC, a domain can be declared before its peer links are cabled (or keep running
+        after they're unplugged); until they are, it runs dual-active."""
+        devs = self.devices_in(group)  # type: ignore[attr-defined]
+        reach, todo = {devs[0]}, [devs[0]]
         while todo:
             u = todo.pop()
             for l in self.links:
@@ -232,9 +251,10 @@ class Layer2Mixin(NetworkBase):
                         todo.append(v)
         if len(reach) < len(devs):
             loose = [d for d in devs if d not in reach]
-            return (f"{group}'s switches must be joined by peer links (cables between them), "
-                    f"like vPC: {' '.join(loose)} {'is' if len(loose) == 1 else 'are'} not joined to "
-                    f"{devs[0]} — try {devs[0]} {loose[0]}")
+            return (f"{group}'s switches need peer links (cables between them), like vPC: "
+                    f"{' '.join(loose)} {'is' if len(loose) == 1 else 'are'} not joined to {devs[0]}, "
+                    f"so the domain runs dual-active until {'it is' if len(loose) == 1 else 'they are'} "
+                    f"(try {devs[0]} {loose[0]})")
         return None
 
     def lag_ports(self, dev_id: str, port: int) -> list[int]:

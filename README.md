@@ -115,7 +115,8 @@ bytesim mynet.json --log-file traffic.log  # also capture the console from start
 bytesim mynet.json --trace --no-detail     # full paths with concise result summaries
 ```
 
-Then, at the command line at the bottom of the screen:
+New to ByteSim? The [tutorial](docs/tutorial.md) builds a first network from a
+blank canvas. For a quick taste, at the command line at the bottom of the screen:
 
 ```text
 add r 4            add a router with 4 ports        → r1
@@ -132,12 +133,14 @@ through devices.
 
 ## Documentation
 
+- [Tutorial](docs/tutorial.md): build two networks and a router from a blank canvas, step by step
 - [User guide](docs/guide.md): concepts, every command, keys, worked examples
 - [Architecture](docs/architecture.md): how the code is organised, and how to add a command
 - [Topology format](docs/topology-format.md): templates and link macros in YAML
 - [Construction scripts](docs/scripts.md): `export script` and `run`, with a tutorial
 - [Save file format](docs/file-format.md)
 - [Changelog](CHANGELOG.md)
+- [Roadmap](ROADMAP.md): planned work
 
 ## Using the model from Python
 

@@ -1,5 +1,8 @@
 # ByteSim user guide
 
+New here? Start with the [tutorial](tutorial.md): two small networks and a
+router, built from a blank canvas.
+
 - [The screen](#the-screen)
 - [Console logging](#console-logging)
 - [Devices and ports](#devices-and-ports)
@@ -758,6 +761,9 @@ What changes once cables are bundled:
   on one member instead of circling.
 - **Load:** unicast flows are spread across the members by the same flow hash
   as ECMP. If a member fails, the others carry on.
+- **Down to one cable:** a bundle needs two data cables. Unplug, delete or
+  re-role the others and it dissolves (the console says so); a failed member
+  still counts, since it's still configured.
 - **A router or gateway end** treats the members as **one interface with one
   address** (on its lowest-numbered member port). Traffic to it is spread
   across all members, and it stays reachable if any member is up, even when
@@ -791,6 +797,10 @@ Once a domain is declared:
 - **Real vPC forwarding rules:** traffic leaves on the switch it's already on
   when that switch has a member. A frame that crossed a peer link is never sent
   out a bundle, so a broadcast can't loop back to the device that sent it.
+- **Declaring before cabling:** like vPC, a domain can be declared before its
+  peer links are cabled (with a warning), or keep running after they're
+  unplugged; until they're joined it runs dual-active (or, with a keepalive,
+  suspends the secondaries). A domain down to one switch dissolves.
 - **Peer link and keepalive:** a control cable between two of the domain's
   switches is their peer keepalive. The primary is the switch with the lowest
   bridge id. If every peer link fails while the keepalive still answers, the
@@ -1161,6 +1171,8 @@ positions, so auto-arrange starts off. The format is described in
 (`role=`, `policy=`). Typing a device id on its own selects it, two ids cable
 them, and a group name on its own selects the group.
 
+### Build and cable
+
 | Command | Aliases | Does |
 |---|---|---|
 | `add <g\|r\|s\|c> [ports] [count]` | `new`, `+` | add devices |
@@ -1170,39 +1182,57 @@ them, and a group name on its own selects the group.
 | `ports <id…> <n>` | `nics`, `resize` | change the port count of one or more devices |
 | `mesh A B`, `zip A B`, `parallel a b n`, `chain x…`, `ring x…` | | cabling patterns; a name is a device, a group (its devices in order) or `a,b,c`; `role=` applies to all |
 | `role <cable> <role>` | | change a cable's role |
-| `fail …` / `restore … \| all` | `down` / `up`, `repair` | inject or clear failures |
-| `group <name> [members] [layout=auto\|horizontal\|vertical]` | | create, extend or select a group; orient the selected layout within it |
-| `ungroup <name> [members]` | | take members out, or dissolve |
-| `groups` | | the group tree |
-| `clone <group> [new-name]` | `copy`, `dup` | copy a group and its internal cables |
-| `copy <group>(old, …) <new>(new, …)` | | clone it, cabled to the new endpoints like the original is to the old |
-| `ports copy <group>(old, …) <group>(new, …)` | | cable an existing group the way another one is cabled |
-| `cluster <name> [routers] [policy=] [mode=]` | | create, configure or inspect an HA cluster (mode: active-active / active-passive) |
-| `clusters`, `uncluster <name>` | | list clusters / turn one back into a group |
+
+### Addressing and DHCP
+
+| Command | Aliases | Does |
+|---|---|---|
 | `ip [id[:port]] [addr [gw] \| dhcp \| adhoc \| none]` | | show or set addresses |
 | `dhcp`, `release`, `adhoc <id[:nic]\|all>` | | client address control |
 | `dhcpd <router> [on\|off]` | | router DHCP server |
+
+### Send traffic
+
+| Command | Aliases | Does |
+|---|---|---|
 | `ping <src> <dst…>` | | echo and reply; groups, `all` or several destinations use multicast |
-| `traceroute <src> <dst>` | `tracert` | probes with rising TTLs: each router answers time exceeded, `*` if its answer can't get back |
 | `mping <src\|all> <id\|addr\|group\|all> … [*]` | `mcastping`, `multicast-ping` | shared echo requests and replies; trailing `*` expands eligibility |
-| `trace [on\|off]` | | global full-path output; no argument shows status |
-| `detail [on\|off\|auto]` | | global diagnostic verbosity; auto adapts to batch size; no argument shows status |
 | `unicast <src> <dst>` | `ucast`, `send` | one-way packet |
 | `multicast <src> <dst…>` | `mcast` | one-to-many packet |
-| `mode graph\|addr` | | graph or address mode |
-| `traffic on [rate] [seed=] [hosts=] [mix=]`, `traffic [off\|rate n\|reset]` | | random background traffic and statistics |
-| `speed [slow\|normal\|fast\|0.1..10]` | | set or show packet animation speed; normal is 1x |
-| `pause`, `resume` | `play`, `unpause` (resume) | freeze playback and queue packet commands, then start them together |
-| `queue [clear]` | | inspect queued actions or discard them |
-| `tee [file\|off]` | | append console output to a text file, show status, or stop capture |
 | `broadcast <id[:port]>` | `bcast`, `flood` | flood one frame (storms in a live loop) |
-| `lag`, `lag auto`, `lag <switch\|domain> <switch\|router\|gateway\|domain>`, `unlag …`, `lags` | | find and bundle aggregatable spans |
-| `mlag <group…>`, `unmlag <group>`, `mlags` | | make a group of switches act as one (needs peer links); `mlags` shows peer state |
-| `stp [on\|off]`, `stp <switch…> on\|off`, `stp priority <switch> <n>`, `stp cost <switch:port> <n>` | | spanning tree |
-| `routes [router…]`, `route <router> <network\|default> via (n,h)\|drop\|auto` | `rib` | routing tables and static routes |
-| `renumber [auto] bfs\|dfs [root]`, `renumber off` | `rename` | renumber ids in traversal order |
-| `layout [layered\|tree\|circular\|grid\|compact\|compact-layered] [auto\|horizontal\|vertical]`, `layout list` | `auto`, `arrange` | layout and/or flow direction, in either order; no argument reuses current settings; `list` shows choices |
+| `traffic on [rate] [seed=] [hosts=] [mix=]`, `traffic [off\|rate n\|reset]` | | random background traffic and statistics |
+
+### Inspect and diagnose
+
+| Command | Aliases | Does |
+|---|---|---|
+| `traceroute <src> <dst>` | `tracert` | probes with rising TTLs: each router answers time exceeded, `*` if its answer can't get back |
+| `trace [on\|off]` | | global full-path output; no argument shows status |
+| `detail [on\|off\|auto]` | | global diagnostic verbosity; auto adapts to batch size; no argument shows status |
+| `tee [file\|off]` | | append console output to a text file, show status, or stop capture |
 | `list` | `ls` | devices, cables, groups |
+| `arp [id] [clear]` | | show or empty ARP caches (each entry's MAC and time left) |
+
+### Switching and aggregation
+
+| Command | Aliases | Does |
+|---|---|---|
+| `stp [on\|off]`, `stp <switch…> on\|off`, `stp priority <switch> <n>`, `stp cost <switch:port> <n>` | | spanning tree |
+| `lag`, `lag auto`, `lag <switch\|domain> <switch\|router\|gateway\|domain>`, `unlag …`, `lags` | | find and bundle aggregatable spans |
+| `mlag <group…>`, `unmlag <group>`, `mlags` | | make a group of switches act as one (dual-active until peer links join them); `mlags` shows peer state |
+
+### Routing and router failover
+
+| Command | Aliases | Does |
+|---|---|---|
+| `cluster <name> [routers] [policy=] [mode=]` | | create, configure or inspect an HA cluster (mode: active-active / active-passive) |
+| `clusters`, `uncluster <name>` | | list clusters / turn one back into a group |
+| `routes [router…]`, `route <router> <network\|default> via (n,h)\|drop\|auto` | `rib` | routing tables and static routes |
+
+### Internet, NAT and overlays
+
+| Command | Aliases | Does |
+|---|---|---|
 | `internet [<group>\|off]` | | declare or show the public internet |
 | `nat <gateway…> on\|off\|easy\|hard`, `nat` | | NAT on gateways that face the internet |
 | `overlay [<name>]`, `overlay <name> <device\|group…> [host=]`, `overlay <name> remove …`, `overlay off <name>` | | create overlays, add or remove members, show status |
@@ -1210,6 +1240,35 @@ them, and a group name on its own selects the group.
 | `overlay <name> coord=<device>\|none exit=<member>\|none lan=on\|off net=<id>` | | coordination server, exit node, LAN access, network |
 | `relay [off] <device…>`, `relay` | | relays for overlay pairs that can't go direct |
 | `acl <overlay> [allow <from> <to>\|remove <n>\|clear\|none]` | | access rules |
+
+### Failures, time and playback
+
+| Command | Aliases | Does |
+|---|---|---|
+| `fail …` / `restore … \| all` | `down` / `up`, `repair` | inject or clear failures |
+| `speed [slow\|normal\|fast\|0.1..10]` | | set or show packet animation speed; normal is 1x |
+| `pause`, `resume` | `play`, `unpause` (resume) | freeze playback and queue packet commands, then start them together |
+| `queue [clear]` | | inspect queued actions or discard them |
+| `wait <seconds>` (or `90s`, `5m`, `2h`) | `sleep` | let simulated time pass: ARP, MAC and NAT entries age, leases renew or expire |
+
+### Groups and layout
+
+| Command | Aliases | Does |
+|---|---|---|
+| `group <name> [members] [layout=auto\|horizontal\|vertical]` | | create, extend or select a group; orient the selected layout within it |
+| `ungroup <name> [members]` | | take members out, or dissolve |
+| `groups` | | the group tree |
+| `clone <group> [new-name]` | `copy`, `dup` | copy a group and its internal cables |
+| `copy <group>(old, …) <new>(new, …)` | | clone it, cabled to the new endpoints like the original is to the old |
+| `ports copy <group>(old, …) <group>(new, …)` | | cable an existing group the way another one is cabled |
+| `renumber [auto] bfs\|dfs [root]`, `renumber off` | `rename` | renumber ids in traversal order |
+| `layout [layered\|tree\|circular\|grid\|compact\|compact-layered] [auto\|horizontal\|vertical]`, `layout list` | `auto`, `arrange` | layout and/or flow direction, in either order; no argument reuses current settings; `list` shows choices |
+
+### Files, history and session
+
+| Command | Aliases | Does |
+|---|---|---|
+| `mode graph\|addr` | | graph or address mode |
 | `demo [basic\|ha\|loop\|core\|mlag\|internet\|overlay]` | | load a sample network |
 | `save [file]`, `load [file]` | `open` | save files; `load` also reads topologies |
 | `export <file.yaml> [ports]` | | write a declarative topology |

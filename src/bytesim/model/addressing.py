@@ -236,7 +236,8 @@ class AddressingMixin(NetworkBase):
         back to ad-hoc when they have nothing. ``skip`` leaves some NICs alone
         (the UI animates their DHCP exchange itself).
         """
-        notes = self.stp_update()  # type: ignore[attr-defined]
+        notes = self.prune_bundles()  # type: ignore[attr-defined]
+        notes += self.stp_update()  # type: ignore[attr-defined]
         self.flush_macs()  # type: ignore[attr-defined]
         notes += [f"addr {n}" for n in self.autoconf_routers()]
         for d in self.sorted_devices():

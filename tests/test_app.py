@@ -392,7 +392,8 @@ def test_mlag_commands():
     app, log = asyncio.run(_session(["add g 4 1", "add s 6 2", "group fab s1 s2", "g1 s1", "g1 s2",
                                      "mlag fab", "s1 s2", "mlag fab", "lag", "lag g1 fab", "mlags"]))
     text = " ".join(" ".join(log).split())
-    assert "must be joined by peer links" in text and "act as one switch, 1 peer link" in text
+    assert "act as one switch, 0 peer links" in text and "runs dual-active until it is" in text
+    assert "fab is already an MLAG domain" in text and "in sync" in text      # once s1–s2 is cabled
     assert "g1–fab: 2 cables can now be one link" in text and "fab–g1: 2 parallel cables" in text
     assert "bundles to g1" in text and app.net.lags == {frozenset({"fab", "g1"})}
 

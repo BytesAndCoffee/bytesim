@@ -15,6 +15,15 @@
 - NAT mappings are per protocol: an ICMP echo mapping doesn't let UDP back in.
 - A topology change flushes every STP switch in the area as it was or is now;
   switches with STP off hear of none.
+- A bundle left with fewer than two data cables (unplugged, deleted or given
+  another role; failed ones still count) dissolves with a note, and an MLAG
+  domain down to one switch dissolves, so saves and exports never hold config
+  the commands can't create.
+- `mlag` accepts a group whose peer links aren't cabled yet (a warning: it runs
+  dual-active until they are), as vPC does; a domain whose peer links were
+  unplugged now exports.
+- Sending to your own address (`ping c1 (1,10)`) is loopback, not "a gateway";
+  `traceroute` and `unicast` say so too.
 
 ### The internet and NAT
 - `internet <group>` declares the public internet. Gateways cabled to it (their
