@@ -58,6 +58,38 @@ UI. Read the relevant documentation before changing behavior:
   for UI integration.
 - Preserve unrelated local changes and untracked files.
 
+## Tracking unfinished work
+
+Unfinished work is tracked with [BytePlan](https://github.com/BytesAndCoffee/byteplan),
+installed with the `dev` extra on Python 3.11+. Write a normal comment where the work
+belongs:
+
+```python
+# FIXME: Withdrawn routes are still advertised
+#   Indented lines below the tag become the description.
+```
+
+BytePlan gives it a permanent ID (`# FIXME[a83f]: ...`) and records it in
+`.byteplan/tasks.json`, which is committed alongside the code.
+
+- **Assigning IDs.** Run `hatch run byteplan scan` before committing. Or install the
+  pre-commit hook once per clone with `hatch run byteplan git install-hooks`, and IDs
+  are added as you commit. The hook refuses files with both staged and unstaged
+  changes; stage the whole file.
+- **Merging the registry.** Run `hatch run byteplan git install-merge-driver` once per
+  clone, so `tasks.json` merges by task ID.
+- **Finishing work.** Close tasks with `hatch run byteplan resolve ID`. Deleting a
+  comment only marks the task missing.
+  - `byteplan list`, `show ID`, `status ID STATUS` and `edit ID` manage tasks.
+  - `byteplan report --format markdown` gives an overview.
+- **Use comments, not `@todo` decorators.** Decorators would add a runtime dependency.
+- **Intentional no-ops.** Methods that are deliberately empty in one host (like the
+  headless `ScriptRunner`) need `# byteplan: ignore` on the `def` line when no shared
+  base class declares them. Otherwise BytePlan reports them as unfinished stubs.
+- **CI.** CI runs `byteplan check --commit HEAD`. It fails when a commit's annotations
+  and registry disagree, e.g. a new TODO without an ID, or a source change committed
+  without `.byteplan/tasks.json`.
+
 ## Development and validation
 
 The project uses [Hatch](https://hatch.pypa.io). It creates the development

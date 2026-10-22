@@ -110,7 +110,7 @@ class ScriptRunner(ConsoleCommands, TopologyCommands, GroupCommands, AddressComm
         self.net = net
         self.pending_actions.clear()
 
-    def arrange(self, announce: bool = False) -> None:
+    def arrange(self, announce: bool = False) -> None:  # byteplan: ignore - headless: nothing to lay out
         pass
 
     def exit(self) -> None:
