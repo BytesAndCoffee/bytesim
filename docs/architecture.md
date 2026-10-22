@@ -270,7 +270,8 @@ without the UI. Add a line to `tui/help.py` and to `docs/guide.md`.
 ## Tests
 
 ```sh
-pytest
+hatch run test            # or plain pytest in a dev install
+hatch run all:test        # every supported Python
 ```
 
 - `tests/test_topology.py`, `test_groups.py`, `test_addressing.py` and
@@ -288,9 +289,13 @@ pytest
 
 ## Releasing
 
-1. Bump `__version__` in `src/bytesim/__init__.py` and add a `CHANGELOG.md`
-   entry.
-2. `python -m build` creates `dist/bytesim-X.Y.Z.tar.gz` and the wheel.
-3. `twine check dist/*`
-4. `twine upload --repository testpypi dist/*` to try it, then
-   `twine upload dist/*`.
+1. Bump the version with `hatch version <rule>` (`b`, `rc`, `release`,
+   `patch`, `minor`, …), which edits `src/bytesim/__init__.py`, and add a
+   `CHANGELOG.md` entry.
+2. `hatch build --clean` creates `dist/bytesim-X.Y.Z.tar.gz` and the wheel.
+   `--clean` deletes every wheel and `.tar.gz` in `dist/`, so keep anything
+   else (such as offline bundles) in a subfolder.
+3. `hatch run dist-check`
+4. `hatch publish -r test` to try it on TestPyPI, then `hatch publish`. Both
+   read the token from `~/.pypirc` (or prompt once and keep it in the
+   keyring), and upload only the top level of `dist/`.

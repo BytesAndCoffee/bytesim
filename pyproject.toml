@@ -54,5 +54,23 @@ include = ["src/bytesim", "tests", "docs", "README.md", "CHANGELOG.md", "LICENSE
 [tool.hatch.build.targets.wheel]
 packages = ["src/bytesim"]
 
+# Development environments: `hatch run check` lints and tests, `hatch run all:test`
+# tests on every supported Python, `hatch build` and `hatch publish` release.
+[tool.hatch.envs.default]
+installer = "uv"
+features = ["dev"]
+
+[tool.hatch.envs.default.scripts]
+test = "pytest -q {args}"
+lint = "pyflakes src tests"
+check = ["lint", "test"]
+dist-check = "twine check dist/*.whl dist/bytesim-*[0-9].tar.gz"
+
+[tool.hatch.envs.all]
+template = "default"
+
+[[tool.hatch.envs.all.matrix]]
+python = ["3.10", "3.11", "3.12", "3.13", "3.14"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]

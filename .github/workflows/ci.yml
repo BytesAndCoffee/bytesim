@@ -26,12 +26,12 @@ jobs:
         with:
           python-version: ${{ matrix.python }}
           allow-prereleases: true
-      - name: Install
-        run: python -m pip install -e ".[dev]"
+      - name: Install Hatch
+        run: python -m pip install hatch
       - name: Lint
-        run: python -m pyflakes src tests
+        run: hatch run lint
       - name: Test
-        run: python -m pytest -q
+        run: hatch run test
 
   build:
     name: Build and check the package
@@ -41,6 +41,6 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"
-      - run: python -m pip install build twine
-      - run: python -m build
-      - run: python -m twine check dist/*
+      - run: python -m pip install hatch
+      - run: hatch build
+      - run: hatch run dist-check

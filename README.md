@@ -179,10 +179,9 @@ for src, dst, frames in net.route("c1", ("c2", 1)):
 ```sh
 git clone https://github.com/BytesAndCoffee/bytesim
 cd bytesim
-python -m venv .venv && . .venv/bin/activate
-pip install -e ".[dev]"
-pytest
-python -m build && twine check dist/*
+hatch run check           # lint and tests
+hatch run all:test        # tests on Python 3.10–3.14
+hatch build && hatch run dist-check
 ```
 
 ## License
