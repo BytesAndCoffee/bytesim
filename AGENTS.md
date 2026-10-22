@@ -60,27 +60,27 @@ UI. Read the relevant documentation before changing behavior:
 
 ## Development and validation
 
-Install the development dependencies in a virtual environment:
+The project uses [Hatch](https://hatch.pypa.io). It creates the development
+environment (with the `dev` extra) on first use:
 
 ```sh
-python -m venv .venv
-. .venv/bin/activate
-python -m pip install -e ".[dev]"
-```
-
-Run the checks relevant to the change:
-
-```sh
-python -m pyflakes src tests
-python -m pytest -q
+hatch run lint            # pyflakes src tests
+hatch run test            # pytest -q; extra arguments pass through
+hatch run check           # both
+hatch run all:test        # every supported Python, 3.10–3.14
 ```
 
 For packaging changes or release preparation:
 
 ```sh
-python -m build
-python -m twine check dist/*
+hatch build
+hatch run dist-check      # twine check on the wheel and sdist
 ```
 
+Without Hatch, `python -m pip install -e ".[dev]"` in a virtual environment
+and the same tools directly work too.
+
 CI runs lint and tests on Linux, macOS, and Windows with Python 3.10–3.14,
-plus a package build check. The version lives in `src/bytesim/__init__.py`.
+plus a package build check. The version lives in `src/bytesim/__init__.py`;
+`hatch version` shows it and `hatch version b` (or `minor`, `release`, …)
+bumps it.
